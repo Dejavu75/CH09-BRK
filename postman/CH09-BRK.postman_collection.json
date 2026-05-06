@@ -1,0 +1,137 @@
+{
+  "info": {
+    "name": "CH09-BRK",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:43080",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "App Root",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "Foreign Root",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/foreign",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "foreign"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Broker Root",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/foreign/broker",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "foreign",
+            "broker"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Broker Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/foreign/broker/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "AGES Pool",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/foreign/broker/ages-pool",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages-pool"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Pool Alias",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/foreign/broker/pool",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "pool"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Warm Up AGES Pool",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/foreign/broker/ages-pool/warmup",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages-pool",
+            "warmup"
+          ]
+        }
+      }
+    }
+  ]
+}

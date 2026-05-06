@@ -1,0 +1,595 @@
+import "dotenv/config";
+
+import { log, warn } from "../utils/logger";
+
+const AGES_BASE_URL = process.env.HAAGES ?? "http://localhost/ages";
+const ASP_NET_SESSION_COOKIE = "ASP.NET_SessionId";
+const AGES_TOKEN_HEADER = "AGES_TOKEN";
+const WARMUP_TIMEOUT_MS = 50_000;
+const WARMUP_MAX_ATTEMPTS = 2;
+const PING_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_MINI_SLOTS = 5;
+const DEFAULT_BIGB_SLOTS = 5;
+
+type AgesPoolSlotStatus = "idle" | "warming" | "ready" | "error";
+type AgesPoolSlotKind = "bigb" | "mini";
+type AgesPoolEndpoint = {
+  kind: AgesPoolSlotKind;
+  endpoint: string;
+};
+
+type AgesPoolSlot = {
+  id: number;
+  kind: AgesPoolSlotKind;
+  endpoint: string;
+  url: string;
+  warmupResponse: string;
+  agesToken: string;
+  aspNetSessionId: string;
+  status: AgesPoolSlotStatus;
+  lastStatusCode?: number;
+  lastInitializedAt?: string;
+  lastError?: string;
+};
+
+export type AgesPoolSummary = {
+  baseUrl: string;
+  size: number;
+  ready: number;
+  warming: number;
+  error: number;
+  slots: Array<{
+    id: number;
+    kind: AgesPoolSlotKind;
+    status: AgesPoolSlotStatus;
+    lastStatusCode?: number;
+    lastInitializedAt?: string;
+    lastError?: string;
+    warmupResponse: string;
+    agesToken: string;
+    aspNetSessionId: string;
+  }>;
+};
+
+export type AgesProxyResult = {
+  slotId: number;
+  slotKind: AgesPoolSlotKind;
+  agesUrl: string;
+  status: number;
+  headers: Record<string, string | string[]>;
+  body: Buffer;
+};
+
+const initialEndpoints = createInitialEndpoints();
+
+export class AgesConnectionPool {
+  private readonly slots: AgesPoolSlot[];
+  private nextSlotIndex = 0;
+  private warmupPromise?: Promise<AgesPoolSummary>;
+  private pingMonitor?: NodeJS.Timeout;
+  private pingSweepRunning = false;
+
+  constructor(
+    private readonly baseUrl: string = AGES_BASE_URL,
+    endpoints: AgesPoolEndpoint[] = initialEndpoints
+  ) {
+    this.slots = endpoints.map((item, index) => ({
+      id: index + 1,
+      kind: item.kind,
+      endpoint: item.endpoint,
+      url: this.resolveEndpoint(item.endpoint),
+      warmupResponse: "",
+      agesToken: "",
+      aspNetSessionId: "",
+      status: "idle"
+    }));
+  }
+
+  async warmUp(): Promise<AgesPoolSummary> {
+    if (this.warmupPromise) {
+      return this.warmupPromise;
+    }
+
+    this.warmupPromise = this.runWarmUp().finally(() => {
+      this.warmupPromise = undefined;
+    });
+
+    return this.warmupPromise;
+  }
+
+  private async runWarmUp(): Promise<AgesPoolSummary> {
+    log(`warmup start | n=${this.slots.length}`);
+
+    for (const slot of this.slots) {
+      await this.initializeSlot(slot);
+
+      if (slot.status !== "ready") {
+        warn(
+          [
+            `warmup stop`,
+            this.formatSlot(slot),
+            `err=${slot.lastError ?? "unknown"}`
+          ].join(" | ")
+        );
+        break;
+      }
+    }
+
+    return this.getSummary();
+  }
+
+  getSummary(): AgesPoolSummary {
+    const slots = this.slots.map((slot) => ({
+      id: slot.id,
+      kind: slot.kind,
+      status: slot.status,
+      lastStatusCode: slot.lastStatusCode,
+      lastInitializedAt: slot.lastInitializedAt,
+      lastError: slot.lastError,
+      warmupResponse: slot.warmupResponse,
+      agesToken: slot.agesToken,
+      aspNetSessionId: slot.aspNetSessionId
+    }));
+
+    return {
+      baseUrl: this.baseUrl,
+      size: this.slots.length,
+      ready: this.slots.filter((slot) => slot.status === "ready").length,
+      warming: this.slots.filter((slot) => slot.status === "warming").length,
+      error: this.slots.filter((slot) => slot.status === "error").length,
+      slots
+    };
+  }
+
+  async request(slotId: number, endpoint: string, init: RequestInit = {}): Promise<Response> {
+    const slot = this.getSlot(slotId);
+    const response = await fetch(this.resolveEndpoint(endpoint), {
+      ...init,
+      headers: this.buildSessionHeaders(slot, init.headers)
+    });
+
+    this.captureSessionState(slot, response);
+    return response;
+  }
+
+  startPingMonitor(): void {
+    if (this.pingMonitor) {
+      return;
+    }
+
+    this.pingMonitor = setInterval(() => {
+      void this.runPingSweep();
+    }, PING_INTERVAL_MS);
+    this.pingMonitor.unref?.();
+  }
+
+  async proxyCall(
+    kind: AgesPoolSlotKind,
+    functionName: string,
+    queryString: string = "",
+    init: RequestInit = {},
+    sourceIp: string = ""
+  ): Promise<AgesProxyResult> {
+    if (!this.isReady()) {
+      throw new Error("AGES pool is still in warmup");
+    }
+
+    const slot = this.getNextReadySlot(kind);
+    const endpoint = this.buildFunctionEndpoint(kind, functionName);
+    const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
+
+    this.logProxyCall(slot, init.method ?? "GET", agesUrl, sourceIp);
+
+    const response = await fetch(agesUrl, {
+      ...init,
+      headers: this.buildSessionHeaders(slot, init.headers)
+    });
+
+    this.captureSessionState(slot, response);
+
+    return {
+      slotId: slot.id,
+      slotKind: slot.kind,
+      agesUrl,
+      status: response.status,
+      headers: this.responseHeadersToObject(response.headers),
+      body: Buffer.from(await response.arrayBuffer())
+    };
+  }
+
+  private async initializeSlot(slot: AgesPoolSlot): Promise<AgesPoolSlotStatus> {
+    slot.status = "warming";
+    slot.lastError = undefined;
+
+    for (let attempt = 1; attempt <= WARMUP_MAX_ATTEMPTS; attempt++) {
+      try {
+        const response = await this.fetchWarmup(slot);
+
+        slot.lastStatusCode = response.status;
+        slot.lastInitializedAt = new Date().toISOString();
+        this.captureSessionState(slot, response);
+        slot.warmupResponse = await response.text();
+
+        if (slot.agesToken && slot.aspNetSessionId) {
+          slot.status = "ready";
+          this.logSlotReady(slot, attempt);
+          return slot.status;
+        }
+
+        slot.status = "error";
+        slot.lastError = `AGES did not return ${AGES_TOKEN_HEADER} and ${ASP_NET_SESSION_COOKIE}`;
+      } catch (error) {
+        slot.status = "error";
+        slot.lastInitializedAt = new Date().toISOString();
+        slot.lastError = error instanceof Error ? error.message : String(error);
+      }
+
+      if (attempt < WARMUP_MAX_ATTEMPTS) {
+        this.logSlotRetry(slot, attempt + 1);
+      }
+    }
+
+    this.logSlotError(slot);
+    return slot.status;
+  }
+
+  private async runPingSweep(): Promise<void> {
+    if (this.pingSweepRunning) {
+      warn("ping skip | err=previous sweep running");
+      return;
+    }
+
+    this.pingSweepRunning = true;
+    try {
+      for (const slot of this.slots) {
+        await this.pingSlot(slot);
+      }
+    } finally {
+      this.pingSweepRunning = false;
+    }
+  }
+
+  private async pingSlot(slot: AgesPoolSlot): Promise<void> {
+    if (slot.status !== "ready") {
+      if (slot.status === "warming") {
+        warn(
+          [
+            `ping skip`,
+            this.formatSlot(slot),
+            `st=${slot.status}`
+          ].join(" | ")
+        );
+        return;
+      }
+
+      slot.lastError = `slot status is ${slot.status}`;
+      warn(
+        [
+          `ping recycle`,
+          this.formatSlot(slot),
+          `st=${slot.status}`
+        ].join(" | ")
+      );
+      await this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping")));
+      return;
+    }
+
+    const pingUrl = this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping"));
+
+    try {
+      const response = await this.fetchWithTimeout(pingUrl, {
+        method: "GET",
+        headers: this.buildSessionHeaders(slot)
+      });
+
+      this.captureSessionState(slot, response);
+      slot.lastStatusCode = response.status;
+
+      if (response.status === 200) {
+        return;
+      }
+
+      slot.lastError = `ping returned status ${response.status}`;
+      await this.recycleSlot(slot, pingUrl);
+    } catch (error) {
+      slot.lastError = error instanceof Error ? error.message : String(error);
+      await this.recycleSlot(slot, pingUrl);
+    }
+  }
+
+  private async recycleSlot(slot: AgesPoolSlot, pingUrl: string): Promise<void> {
+    warn(
+      [
+        `recycle start`,
+        this.formatSlot(slot),
+        `u=${this.formatUrl(pingUrl)}`,
+        `err=${slot.lastError ?? "unknown"}`
+      ].join(" | ")
+    );
+
+    slot.agesToken = "";
+    slot.aspNetSessionId = "";
+    slot.warmupResponse = "";
+    slot.status = "idle";
+    const recycledStatus = await this.initializeSlot(slot);
+
+    if (recycledStatus === "ready") {
+      log(
+        [
+          `recycle ok`,
+          this.formatSlot(slot),
+          `st=${recycledStatus}`
+        ].join(" | ")
+      );
+      return;
+    }
+
+    warn(
+      [
+        `recycle fail`,
+        this.formatSlot(slot),
+        `st=${recycledStatus}`,
+        `err=${slot.lastError ?? "unknown"}`
+      ].join(" | ")
+    );
+  }
+
+  private async fetchWarmup(slot: AgesPoolSlot): Promise<Response> {
+    return this.fetchWithTimeout(slot.url, {
+      method: "GET",
+      headers: {
+        [AGES_TOKEN_HEADER]: "",
+        Cookie: `${ASP_NET_SESSION_COOKIE}=`
+      }
+    });
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), WARMUP_TIMEOUT_MS);
+
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: abortController.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private logSlotReady(slot: AgesPoolSlot, attempt: number): void {
+    log(
+      [
+        `ready`,
+        this.formatSlot(slot),
+        `u=${this.formatUrl(slot.url)}`,
+        `a=${attempt}`,
+        `st=${slot.lastStatusCode ?? "unknown"}`,
+        `${AGES_TOKEN_HEADER}=${slot.agesToken}`,
+        `${ASP_NET_SESSION_COOKIE}=${slot.aspNetSessionId}`,
+        `response=${slot.warmupResponse}`
+      ].join(" | ")
+    );
+  }
+
+  private logProxyCall(slot: AgesPoolSlot, method: string, url: string, sourceIp: string): void {
+    const formattedUrl = this.formatUrl(url);
+
+    if (formattedUrl.startsWith("/ages/~mini~/beat.ages")) {
+      return;
+    }
+
+    log(
+      [
+        `proxy`,
+        this.formatSlot(slot),
+        `ip=${sourceIp || "unknown"}`,
+        `m=${method}`,
+        `u=${formattedUrl}`
+      ].join(" | ")
+    );
+  }
+
+  private logSlotRetry(slot: AgesPoolSlot, nextAttempt: number): void {
+    warn(
+      [
+        `retry`,
+        this.formatSlot(slot),
+        `u=${this.formatUrl(slot.url)}`,
+        `a=${nextAttempt}`,
+        `to=${WARMUP_TIMEOUT_MS}`,
+        `err=${slot.lastError ?? "unknown"}`
+      ].join(" | ")
+    );
+  }
+
+  private logSlotError(slot: AgesPoolSlot): void {
+    warn(
+      [
+        `slot err`,
+        this.formatSlot(slot),
+        `u=${this.formatUrl(slot.url)}`,
+        `st=${slot.lastStatusCode ?? "unknown"}`,
+        `err=${slot.lastError ?? "unknown"}`
+      ].join(" | ")
+    );
+  }
+
+  private captureSessionState(slot: AgesPoolSlot, response: Response): void {
+    const agesToken = response.headers.get(AGES_TOKEN_HEADER) ?? response.headers.get("AGES-TOKEN");
+    const aspNetSessionId = this.extractAspNetSessionId(response.headers);
+
+    if (agesToken) {
+      slot.agesToken = agesToken;
+    }
+
+    if (aspNetSessionId) {
+      slot.aspNetSessionId = aspNetSessionId;
+    }
+  }
+
+  private buildSessionHeaders(slot: AgesPoolSlot, headers?: HeadersInit): Record<string, string> {
+    const normalizedHeaders = this.normalizeHeaders(headers);
+    const currentCookie = normalizedHeaders.Cookie ?? normalizedHeaders.cookie ?? "";
+
+    delete normalizedHeaders.cookie;
+    normalizedHeaders[AGES_TOKEN_HEADER] = slot.agesToken;
+    normalizedHeaders.Cookie = this.mergeCookies(currentCookie, `${ASP_NET_SESSION_COOKIE}=${slot.aspNetSessionId}`);
+
+    return normalizedHeaders;
+  }
+
+  private responseHeadersToObject(headers: Headers): Record<string, string | string[]> {
+    const normalizedHeaders: Record<string, string | string[]> = {};
+
+    headers.forEach((value, key) => {
+      normalizedHeaders[key] = value;
+    });
+
+    const setCookieHeaders = this.getSetCookieHeaders(headers);
+
+    if (setCookieHeaders.length > 0) {
+      normalizedHeaders["set-cookie"] = setCookieHeaders;
+    }
+
+    return normalizedHeaders;
+  }
+
+  private normalizeHeaders(headers?: HeadersInit): Record<string, string> {
+    const normalizedHeaders: Record<string, string> = {};
+
+    if (!headers) {
+      return normalizedHeaders;
+    }
+
+    new Headers(headers).forEach((value, key) => {
+      normalizedHeaders[key] = value;
+    });
+
+    return normalizedHeaders;
+  }
+
+  private extractAspNetSessionId(headers: Headers): string {
+    const setCookieHeaders = this.getSetCookieHeaders(headers).join(",");
+    const match = setCookieHeaders.match(/ASP\.NET_SessionId=([^;,\s]+)/i);
+
+    return match?.[1] ?? "";
+  }
+
+  private getSetCookieHeaders(headers: Headers): string[] {
+    const nodeHeaders = headers as Headers & { getSetCookie?: () => string[] };
+    const cookies = typeof nodeHeaders.getSetCookie === "function" ? nodeHeaders.getSetCookie() : [];
+    const setCookie = headers.get("set-cookie");
+
+    return setCookie ? [...cookies, setCookie] : cookies;
+  }
+
+  private mergeCookies(currentCookie: string, sessionCookie: string): string {
+    const withoutSession = currentCookie
+      .split(";")
+      .map((cookie) => cookie.trim())
+      .filter((cookie) => cookie && !cookie.toLowerCase().startsWith(`${ASP_NET_SESSION_COOKIE.toLowerCase()}=`));
+
+    return [...withoutSession, sessionCookie].join("; ");
+  }
+
+  private getSlot(slotId: number): AgesPoolSlot {
+    const slot = this.slots.find((item) => item.id === slotId);
+
+    if (!slot) {
+      throw new Error(`AGES pool slot ${slotId} does not exist`);
+    }
+
+    return slot;
+  }
+
+  private getNextReadySlot(kind: AgesPoolSlotKind): AgesPoolSlot {
+    const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready");
+
+    if (readySlots.length === 0) {
+      throw new Error(`AGES ${kind} pool has no ready slots`);
+    }
+
+    const slot = readySlots[this.nextSlotIndex % readySlots.length];
+    this.nextSlotIndex = (this.nextSlotIndex + 1) % readySlots.length;
+
+    return slot;
+  }
+
+  private isReady(): boolean {
+    return this.slots.length > 0 && this.slots.every((slot) => slot.status === "ready");
+  }
+
+  private buildFunctionEndpoint(kind: AgesPoolSlotKind, functionName: string): string {
+    const normalizedFunctionName = functionName.replace(/^\/+/, "");
+    const agesFile = normalizedFunctionName.toLowerCase().endsWith(".ages")
+      ? normalizedFunctionName
+      : `${normalizedFunctionName}.ages`;
+
+    return kind === "mini" ? `/~mini~/${agesFile}` : agesFile;
+  }
+
+  private appendQueryString(url: string, queryString: string): string {
+    const normalizedQueryString = queryString.replace(/^\?/, "");
+
+    return normalizedQueryString ? `${url}?${normalizedQueryString}` : url;
+  }
+
+  private resolveEndpoint(endpoint: string): string {
+    return `${this.baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+  }
+
+  private formatSlotId(slotId: number): string {
+    return slotId.toString().padStart(2, "0");
+  }
+
+  private formatKind(kind: AgesPoolSlotKind): string {
+    return kind === "mini" ? "M" : "B";
+  }
+
+  private formatSlot(slot: AgesPoolSlot): string {
+    return `S${this.formatSlotId(slot.id)}${this.formatKind(slot.kind)}`;
+  }
+
+  private formatUrl(url: string): string {
+    try {
+      const parsedUrl = new URL(url);
+      return `${parsedUrl.pathname}${parsedUrl.search}`;
+    } catch {
+      return url.replace(this.baseUrl.replace(/\/+$/, ""), "");
+    }
+  }
+}
+
+function createInitialEndpoints(): AgesPoolEndpoint[] {
+  return [
+    ...Array<AgesPoolEndpoint>(getEnvSlotCount("slots_mini", DEFAULT_MINI_SLOTS)).fill({
+      kind: "mini",
+      endpoint: "/~mini~/dummy_val.ages"
+    }),
+    ...Array<AgesPoolEndpoint>(getEnvSlotCount("slots_bigb", DEFAULT_BIGB_SLOTS)).fill({
+      kind: "bigb",
+      endpoint: "dummy_val.ages"
+    })
+  ];
+}
+
+function getEnvSlotCount(envName: string, fallback: number): number {
+  const rawValue = process.env[envName];
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const value = Number.parseInt(rawValue, 10);
+
+  if (!Number.isInteger(value) || value < 0) {
+    warn(`Invalid ${envName}="${rawValue}". Using fallback ${fallback}.`);
+    return fallback;
+  }
+
+  return value;
+}
+
+export const agesConnectionPool = new AgesConnectionPool();

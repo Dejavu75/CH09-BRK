@@ -1,0 +1,36 @@
+{
+  "name": "se_broker",
+  "version": "1.0.0",
+  "description": "Broker de comunicaciones con el sistema AGES y el resto de elementos de la configuracion",
+  "main": "build/app.js",
+  "scripts": {
+    "dev": "nodemon",
+    "tsc": "node ./node_modules/typescript/bin/tsc",
+    "start": "node build/app.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build-push": "docker build -t dhzacur/ha_ch09_brk . && docker push dhzacur/ha_ch09_brk",
+    "build": "docker build -t dhzacur/ha_ch09_brk . "
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@eslint/js": "^9.11.1",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.7.4",
+    "eslint": "^9.11.1",
+    "globals": "^15.9.0",
+    "nodemon": "^3.1.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.7.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.0",
+    "se_configbase": "github:Dejavu75/se_configbase",
+    "se_contractholder": "github:Dejavu75/se_contractholder"
+  }
+}
