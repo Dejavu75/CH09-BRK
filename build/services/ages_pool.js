@@ -75,6 +75,9 @@ class AgesConnectionPool {
             lastStatusCode: slot.lastStatusCode,
             lastInitializedAt: slot.lastInitializedAt,
             lastError: slot.lastError,
+            lastEndpoint: slot.lastEndpoint,
+            lastUsedAt: slot.lastUsedAt,
+            lastResponsePreview: slot.lastResponsePreview,
             warmupResponse: slot.warmupResponse,
             agesToken: slot.agesToken,
             aspNetSessionId: slot.aspNetSessionId
@@ -106,8 +109,16 @@ class AgesConnectionPool {
         }, PING_INTERVAL_MS);
         (_b = (_a = this.pingMonitor).unref) === null || _b === void 0 ? void 0 : _b.call(_a);
     }
+    recycleSlotByReference(slotReference) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const slot = this.getSlotByReference(slotReference);
+            slot.lastError = "manual recycle requested";
+            yield this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "manual")));
+            return this.getSummary();
+        });
+    }
     proxyCall(kind_1, functionName_1) {
-        return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "") {
+        return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "") {
             var _a;
             if (!this.isReady()) {
                 throw new Error("AGES pool is still in warmup");
@@ -115,16 +126,24 @@ class AgesConnectionPool {
             const slot = this.getNextReadySlot(kind);
             const endpoint = this.buildFunctionEndpoint(kind, functionName);
             const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
-            this.logProxyCall(slot, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", agesUrl, sourceIp);
+            this.logProxyCall(slot, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", agesUrl, sourceIp, sourceIpSource);
             const response = yield fetch(agesUrl, Object.assign(Object.assign({}, init), { headers: this.buildSessionHeaders(slot, init.headers) }));
             this.captureSessionState(slot, response);
+            slot.lastStatusCode = response.status;
+            const body = Buffer.from(yield response.arrayBuffer());
+            this.recordSlotUse(slot, agesUrl, body);
+            const recycleReason = this.getRecycleReason(response.status, body);
+            if (recycleReason) {
+                slot.lastError = recycleReason;
+                yield this.recycleSlot(slot, agesUrl);
+            }
             return {
                 slotId: slot.id,
                 slotKind: slot.kind,
                 agesUrl,
                 status: response.status,
                 headers: this.responseHeadersToObject(response.headers),
-                body: Buffer.from(yield response.arrayBuffer())
+                body
             };
         });
     }
@@ -283,7 +302,7 @@ class AgesConnectionPool {
             `response=${slot.warmupResponse}`
         ].join(" | "));
     }
-    logProxyCall(slot, method, url, sourceIp) {
+    logProxyCall(slot, method, url, sourceIp, sourceIpSource) {
         const formattedUrl = this.formatUrl(url);
         if (formattedUrl.startsWith("/ages/~mini~/beat.ages")) {
             return;
@@ -292,6 +311,7 @@ class AgesConnectionPool {
             `proxy`,
             this.formatSlot(slot),
             `ip=${sourceIp || "unknown"}`,
+            `ips=${sourceIpSource || "unknown"}`,
             `m=${method}`,
             `u=${formattedUrl}`
         ].join(" | "));
@@ -384,6 +404,14 @@ class AgesConnectionPool {
         }
         return slot;
     }
+    getSlotByReference(slotReference) {
+        const normalizedReference = slotReference.trim().toUpperCase();
+        const idMatch = normalizedReference.match(/^S?(\d{1,2})(?:[MB])?$/);
+        if (!idMatch) {
+            throw new Error(`Invalid slot reference ${slotReference}`);
+        }
+        return this.getSlot(Number.parseInt(idMatch[1], 10));
+    }
     getNextReadySlot(kind) {
         const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready");
         if (readySlots.length === 0) {
@@ -427,6 +455,21 @@ class AgesConnectionPool {
         catch (_a) {
             return url.replace(this.baseUrl.replace(/\/+$/, ""), "");
         }
+    }
+    recordSlotUse(slot, agesUrl, body) {
+        slot.lastEndpoint = this.formatUrl(agesUrl);
+        slot.lastUsedAt = new Date().toISOString();
+        slot.lastResponsePreview = body.toString("utf8").slice(0, 100);
+    }
+    getRecycleReason(status, body) {
+        if (status >= 500) {
+            return `proxy returned status ${status}`;
+        }
+        const responseText = body.toString("utf8");
+        if (/Desde el SCRIPT:\s*(SERVICIOS_AVFP_MINI|SAVFP)\s+no es un objeto/i.test(responseText)) {
+            return "AGES script object error";
+        }
+        return "";
     }
 }
 exports.AgesConnectionPool = AgesConnectionPool;

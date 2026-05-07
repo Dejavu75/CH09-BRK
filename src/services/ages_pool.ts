@@ -30,6 +30,9 @@ type AgesPoolSlot = {
   lastStatusCode?: number;
   lastInitializedAt?: string;
   lastError?: string;
+  lastEndpoint?: string;
+  lastUsedAt?: string;
+  lastResponsePreview?: string;
 };
 
 export type AgesPoolSummary = {
@@ -45,6 +48,9 @@ export type AgesPoolSummary = {
     lastStatusCode?: number;
     lastInitializedAt?: string;
     lastError?: string;
+    lastEndpoint?: string;
+    lastUsedAt?: string;
+    lastResponsePreview?: string;
     warmupResponse: string;
     agesToken: string;
     aspNetSessionId: string;
@@ -126,6 +132,9 @@ export class AgesConnectionPool {
       lastStatusCode: slot.lastStatusCode,
       lastInitializedAt: slot.lastInitializedAt,
       lastError: slot.lastError,
+      lastEndpoint: slot.lastEndpoint,
+      lastUsedAt: slot.lastUsedAt,
+      lastResponsePreview: slot.lastResponsePreview,
       warmupResponse: slot.warmupResponse,
       agesToken: slot.agesToken,
       aspNetSessionId: slot.aspNetSessionId
@@ -163,12 +172,20 @@ export class AgesConnectionPool {
     this.pingMonitor.unref?.();
   }
 
+  async recycleSlotByReference(slotReference: string): Promise<AgesPoolSummary> {
+    const slot = this.getSlotByReference(slotReference);
+    slot.lastError = "manual recycle requested";
+    await this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "manual")));
+    return this.getSummary();
+  }
+
   async proxyCall(
     kind: AgesPoolSlotKind,
     functionName: string,
     queryString: string = "",
     init: RequestInit = {},
-    sourceIp: string = ""
+    sourceIp: string = "",
+    sourceIpSource: string = ""
   ): Promise<AgesProxyResult> {
     if (!this.isReady()) {
       throw new Error("AGES pool is still in warmup");
@@ -178,7 +195,7 @@ export class AgesConnectionPool {
     const endpoint = this.buildFunctionEndpoint(kind, functionName);
     const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
 
-    this.logProxyCall(slot, init.method ?? "GET", agesUrl, sourceIp);
+    this.logProxyCall(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource);
 
     const response = await fetch(agesUrl, {
       ...init,
@@ -186,6 +203,17 @@ export class AgesConnectionPool {
     });
 
     this.captureSessionState(slot, response);
+    slot.lastStatusCode = response.status;
+
+    const body = Buffer.from(await response.arrayBuffer());
+    this.recordSlotUse(slot, agesUrl, body);
+
+    const recycleReason = this.getRecycleReason(response.status, body);
+
+    if (recycleReason) {
+      slot.lastError = recycleReason;
+      await this.recycleSlot(slot, agesUrl);
+    }
 
     return {
       slotId: slot.id,
@@ -193,7 +221,7 @@ export class AgesConnectionPool {
       agesUrl,
       status: response.status,
       headers: this.responseHeadersToObject(response.headers),
-      body: Buffer.from(await response.arrayBuffer())
+      body
     };
   }
 
@@ -373,7 +401,7 @@ export class AgesConnectionPool {
     );
   }
 
-  private logProxyCall(slot: AgesPoolSlot, method: string, url: string, sourceIp: string): void {
+  private logProxyCall(slot: AgesPoolSlot, method: string, url: string, sourceIp: string, sourceIpSource: string): void {
     const formattedUrl = this.formatUrl(url);
 
     if (formattedUrl.startsWith("/ages/~mini~/beat.ages")) {
@@ -385,6 +413,7 @@ export class AgesConnectionPool {
         `proxy`,
         this.formatSlot(slot),
         `ip=${sourceIp || "unknown"}`,
+        `ips=${sourceIpSource || "unknown"}`,
         `m=${method}`,
         `u=${formattedUrl}`
       ].join(" | ")
@@ -504,6 +533,17 @@ export class AgesConnectionPool {
     return slot;
   }
 
+  private getSlotByReference(slotReference: string): AgesPoolSlot {
+    const normalizedReference = slotReference.trim().toUpperCase();
+    const idMatch = normalizedReference.match(/^S?(\d{1,2})(?:[MB])?$/);
+
+    if (!idMatch) {
+      throw new Error(`Invalid slot reference ${slotReference}`);
+    }
+
+    return this.getSlot(Number.parseInt(idMatch[1], 10));
+  }
+
   private getNextReadySlot(kind: AgesPoolSlotKind): AgesPoolSlot {
     const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready");
 
@@ -559,6 +599,26 @@ export class AgesConnectionPool {
     } catch {
       return url.replace(this.baseUrl.replace(/\/+$/, ""), "");
     }
+  }
+
+  private recordSlotUse(slot: AgesPoolSlot, agesUrl: string, body: Buffer): void {
+    slot.lastEndpoint = this.formatUrl(agesUrl);
+    slot.lastUsedAt = new Date().toISOString();
+    slot.lastResponsePreview = body.toString("utf8").slice(0, 100);
+  }
+
+  private getRecycleReason(status: number, body: Buffer): string {
+    if (status >= 500) {
+      return `proxy returned status ${status}`;
+    }
+
+    const responseText = body.toString("utf8");
+
+    if (/Desde el SCRIPT:\s*(SERVICIOS_AVFP_MINI|SAVFP)\s+no es un objeto/i.test(responseText)) {
+      return "AGES script object error";
+    }
+
+    return "";
   }
 }
 

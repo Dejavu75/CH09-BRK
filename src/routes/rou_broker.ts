@@ -23,8 +23,24 @@ BrokerRouter.get("/pool", (_req, res) => {
   res.json(agesConnectionPool.getSummary());
 });
 
+BrokerRouter.get("/ages-pool/show", (_req, res) => {
+  res.type("html").send(renderPoolPage());
+});
+
+BrokerRouter.get("/pool/show", (_req, res) => {
+  res.type("html").send(renderPoolPage());
+});
+
 BrokerRouter.post("/ages-pool/warmup", async (_req, res) => {
   res.json(await agesConnectionPool.warmUp());
+});
+
+BrokerRouter.post("/ages-pool/slots/:slot/recycle", async (req, res) => {
+  await recyclePoolSlot(req, res);
+});
+
+BrokerRouter.post("/pool/slots/:slot/recycle", async (req, res) => {
+  await recyclePoolSlot(req, res);
 });
 
 BrokerRouter.all("/ages/~mini~/:agesFunction", async (req, res) => {
@@ -43,8 +59,20 @@ BrokerRouter.all("/:agesFunction", async (req, res) => {
   await proxyAgesRequest("bigb", req, res);
 });
 
+async function recyclePoolSlot(req: Request, res: Response): Promise<void> {
+  try {
+    res.json(await agesConnectionPool.recycleSlotByReference(String(req.params.slot)));
+  } catch (error) {
+    res.status(400).json({
+      status: "error",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Response): Promise<void> {
   try {
+    const sourceIp = getSourceIp(req);
     const result = await agesConnectionPool.proxyCall(
       kind,
       String(req.params.agesFunction),
@@ -54,7 +82,8 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
         headers: getProxyHeaders(req),
         body: getProxyBody(req)
       },
-      getSourceIp(req)
+      sourceIp.value,
+      sourceIp.source
     );
 
     setProxyResponseHeaders(res, result.headers);
@@ -84,20 +113,29 @@ function getQueryString(req: Request): string {
   return req.originalUrl.split("?")[1] ?? "";
 }
 
-function getSourceIp(req: Request): string {
+function getSourceIp(req: Request): { source: string; value: string } {
   const candidates = [
-    getFirstHeaderValue(req.headers["x-forwarded-for"])?.split(",")[0],
-    getFirstHeaderValue(req.headers["x-real-ip"]),
-    getFirstHeaderValue(req.headers["x-client-ip"]),
-    getFirstHeaderValue(req.headers["x-original-forwarded-for"])?.split(",")[0],
-    getForwardedFor(req.headers.forwarded),
-    req.ip,
-    req.socket.remoteAddress
+    { source: "xff", value: getFirstHeaderValue(req.headers["x-forwarded-for"])?.split(",")[0] },
+    { source: "xri", value: getFirstHeaderValue(req.headers["x-real-ip"]) },
+    { source: "xci", value: getFirstHeaderValue(req.headers["x-client-ip"]) },
+    { source: "xofi", value: getFirstHeaderValue(req.headers["x-original-forwarded-for"])?.split(",")[0] },
+    { source: "cf", value: getFirstHeaderValue(req.headers["cf-connecting-ip"]) },
+    { source: "tci", value: getFirstHeaderValue(req.headers["true-client-ip"]) },
+    { source: "envoy", value: getFirstHeaderValue(req.headers["x-envoy-external-address"]) },
+    { source: "forwarded", value: getForwardedFor(req.headers.forwarded) },
+    { source: "req", value: req.ip },
+    { source: "socket", value: req.socket.remoteAddress }
   ];
 
-  const sourceIp = candidates.find((value) => value && value.trim().length > 0) ?? "";
+  const sourceIp = candidates.find((candidate) => candidate.value && candidate.value.trim().length > 0) ?? {
+    source: "unknown",
+    value: ""
+  };
 
-  return normalizeIp(sourceIp);
+  return {
+    source: sourceIp.source,
+    value: normalizeIp(sourceIp.value ?? "")
+  };
 }
 
 function getFirstHeaderValue(value: string | string[] | undefined): string | undefined {
@@ -156,4 +194,39 @@ function setProxyResponseHeaders(res: Response, headers: Record<string, string |
       res.setHeader(key, value);
     }
   });
+}
+
+function renderPoolPage(): string {
+  const pool = agesConnectionPool.getSummary();
+  const json = escapeHtml(JSON.stringify(pool, null, 2));
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CH09-BRK Pool</title>
+  <style>
+    body { margin: 0; font-family: Consolas, Monaco, monospace; background: #111827; color: #e5e7eb; }
+    main { padding: 24px; }
+    h1 { margin: 0 0 12px; font-size: 20px; font-family: Arial, sans-serif; }
+    .summary { margin-bottom: 16px; color: #93c5fd; font-family: Arial, sans-serif; }
+    pre { margin: 0; padding: 16px; background: #020617; border: 1px solid #334155; border-radius: 6px; overflow: auto; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>CH09-BRK Pool</h1>
+    <div class="summary">ready ${pool.ready}/${pool.size} | warming ${pool.warming} | error ${pool.error}</div>
+    <pre>${json}</pre>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }

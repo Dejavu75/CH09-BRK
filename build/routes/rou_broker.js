@@ -28,8 +28,20 @@ exports.BrokerRouter.get("/ages-pool", (_req, res) => {
 exports.BrokerRouter.get("/pool", (_req, res) => {
     res.json(ages_pool_1.agesConnectionPool.getSummary());
 });
+exports.BrokerRouter.get("/ages-pool/show", (_req, res) => {
+    res.type("html").send(renderPoolPage());
+});
+exports.BrokerRouter.get("/pool/show", (_req, res) => {
+    res.type("html").send(renderPoolPage());
+});
 exports.BrokerRouter.post("/ages-pool/warmup", (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     res.json(yield ages_pool_1.agesConnectionPool.warmUp());
+}));
+exports.BrokerRouter.post("/ages-pool/slots/:slot/recycle", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    yield recyclePoolSlot(req, res);
+}));
+exports.BrokerRouter.post("/pool/slots/:slot/recycle", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    yield recyclePoolSlot(req, res);
 }));
 exports.BrokerRouter.all("/ages/~mini~/:agesFunction", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     yield proxyAgesRequest("mini", req, res);
@@ -43,14 +55,28 @@ exports.BrokerRouter.all("/~mini~/:agesFunction", (req, res) => __awaiter(void 0
 exports.BrokerRouter.all("/:agesFunction", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     yield proxyAgesRequest("bigb", req, res);
 }));
+function recyclePoolSlot(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            res.json(yield ages_pool_1.agesConnectionPool.recycleSlotByReference(String(req.params.slot)));
+        }
+        catch (error) {
+            res.status(400).json({
+                status: "error",
+                message: error instanceof Error ? error.message : String(error)
+            });
+        }
+    });
+}
 function proxyAgesRequest(kind, req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
+            const sourceIp = getSourceIp(req);
             const result = yield ages_pool_1.agesConnectionPool.proxyCall(kind, String(req.params.agesFunction), getQueryString(req), {
                 method: req.method,
                 headers: getProxyHeaders(req),
                 body: getProxyBody(req)
-            }, getSourceIp(req));
+            }, sourceIp.value, sourceIp.source);
             setProxyResponseHeaders(res, result.headers);
             res
                 .status(result.status)
@@ -79,18 +105,27 @@ function getQueryString(req) {
     return (_a = req.originalUrl.split("?")[1]) !== null && _a !== void 0 ? _a : "";
 }
 function getSourceIp(req) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const candidates = [
-        (_a = getFirstHeaderValue(req.headers["x-forwarded-for"])) === null || _a === void 0 ? void 0 : _a.split(",")[0],
-        getFirstHeaderValue(req.headers["x-real-ip"]),
-        getFirstHeaderValue(req.headers["x-client-ip"]),
-        (_b = getFirstHeaderValue(req.headers["x-original-forwarded-for"])) === null || _b === void 0 ? void 0 : _b.split(",")[0],
-        getForwardedFor(req.headers.forwarded),
-        req.ip,
-        req.socket.remoteAddress
+        { source: "xff", value: (_a = getFirstHeaderValue(req.headers["x-forwarded-for"])) === null || _a === void 0 ? void 0 : _a.split(",")[0] },
+        { source: "xri", value: getFirstHeaderValue(req.headers["x-real-ip"]) },
+        { source: "xci", value: getFirstHeaderValue(req.headers["x-client-ip"]) },
+        { source: "xofi", value: (_b = getFirstHeaderValue(req.headers["x-original-forwarded-for"])) === null || _b === void 0 ? void 0 : _b.split(",")[0] },
+        { source: "cf", value: getFirstHeaderValue(req.headers["cf-connecting-ip"]) },
+        { source: "tci", value: getFirstHeaderValue(req.headers["true-client-ip"]) },
+        { source: "envoy", value: getFirstHeaderValue(req.headers["x-envoy-external-address"]) },
+        { source: "forwarded", value: getForwardedFor(req.headers.forwarded) },
+        { source: "req", value: req.ip },
+        { source: "socket", value: req.socket.remoteAddress }
     ];
-    const sourceIp = (_c = candidates.find((value) => value && value.trim().length > 0)) !== null && _c !== void 0 ? _c : "";
-    return normalizeIp(sourceIp);
+    const sourceIp = (_c = candidates.find((candidate) => candidate.value && candidate.value.trim().length > 0)) !== null && _c !== void 0 ? _c : {
+        source: "unknown",
+        value: ""
+    };
+    return {
+        source: sourceIp.source,
+        value: normalizeIp((_d = sourceIp.value) !== null && _d !== void 0 ? _d : "")
+    };
 }
 function getFirstHeaderValue(value) {
     if (Array.isArray(value)) {
@@ -135,4 +170,36 @@ function setProxyResponseHeaders(res, headers) {
             res.setHeader(key, value);
         }
     });
+}
+function renderPoolPage() {
+    const pool = ages_pool_1.agesConnectionPool.getSummary();
+    const json = escapeHtml(JSON.stringify(pool, null, 2));
+    return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CH09-BRK Pool</title>
+  <style>
+    body { margin: 0; font-family: Consolas, Monaco, monospace; background: #111827; color: #e5e7eb; }
+    main { padding: 24px; }
+    h1 { margin: 0 0 12px; font-size: 20px; font-family: Arial, sans-serif; }
+    .summary { margin-bottom: 16px; color: #93c5fd; font-family: Arial, sans-serif; }
+    pre { margin: 0; padding: 16px; background: #020617; border: 1px solid #334155; border-radius: 6px; overflow: auto; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>CH09-BRK Pool</h1>
+    <div class="summary">ready ${pool.ready}/${pool.size} | warming ${pool.warming} | error ${pool.error}</div>
+    <pre>${json}</pre>
+  </main>
+</body>
+</html>`;
+}
+function escapeHtml(value) {
+    return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 }
