@@ -43,6 +43,14 @@ BrokerRouter.post("/pool/slots/:slot/recycle", async (req, res) => {
   await recyclePoolSlot(req, res);
 });
 
+BrokerRouter.post("/ages-host/restart-iis", async (_req, res) => {
+  await restartIis(res);
+});
+
+BrokerRouter.post("/iis/restart", async (_req, res) => {
+  await restartIis(res);
+});
+
 BrokerRouter.all("/ages/~mini~/:agesFunction", async (req, res) => {
   await proxyAgesRequest("mini", req, res);
 });
@@ -70,6 +78,11 @@ async function recyclePoolSlot(req: Request, res: Response): Promise<void> {
   }
 }
 
+async function restartIis(res: Response): Promise<void> {
+  const result = await agesConnectionPool.restartAgesHostManually();
+  res.status(result.status === "ok" ? 200 : 500).json(result);
+}
+
 async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Response): Promise<void> {
   try {
     const sourceIp = getSourceIp(req);
@@ -93,10 +106,10 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       .setHeader("X-CH09-BRK-Pool-Kind", result.slotKind)
       .send(result.body);
   } catch (error) {
-    if (error instanceof Error && error.message === "AGES pool is still in warmup") {
+    if (error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message)) {
       res.status(503).json({
         status: "warmup",
-        message: "AGES pool slots are still in warmup",
+        message: error.message.replace("bigb", "BigBoy"),
         pool: agesConnectionPool.getSummary()
       });
       return;

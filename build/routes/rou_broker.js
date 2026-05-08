@@ -43,6 +43,12 @@ exports.BrokerRouter.post("/ages-pool/slots/:slot/recycle", (req, res) => __awai
 exports.BrokerRouter.post("/pool/slots/:slot/recycle", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     yield recyclePoolSlot(req, res);
 }));
+exports.BrokerRouter.post("/ages-host/restart-iis", (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    yield restartIis(res);
+}));
+exports.BrokerRouter.post("/iis/restart", (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    yield restartIis(res);
+}));
 exports.BrokerRouter.all("/ages/~mini~/:agesFunction", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     yield proxyAgesRequest("mini", req, res);
 }));
@@ -68,6 +74,12 @@ function recyclePoolSlot(req, res) {
         }
     });
 }
+function restartIis(res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const result = yield ages_pool_1.agesConnectionPool.restartAgesHostManually();
+        res.status(result.status === "ok" ? 200 : 500).json(result);
+    });
+}
 function proxyAgesRequest(kind, req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -85,10 +97,10 @@ function proxyAgesRequest(kind, req, res) {
                 .send(result.body);
         }
         catch (error) {
-            if (error instanceof Error && error.message === "AGES pool is still in warmup") {
+            if (error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message)) {
                 res.status(503).json({
                     status: "warmup",
-                    message: "AGES pool slots are still in warmup",
+                    message: error.message.replace("bigb", "BigBoy"),
                     pool: ages_pool_1.agesConnectionPool.getSummary()
                 });
                 return;

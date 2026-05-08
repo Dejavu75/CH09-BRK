@@ -1,5 +1,8 @@
 import "dotenv/config";
 
+import { execFile } from "child_process";
+import { promisify } from "util";
+
 import { log, warn } from "../utils/logger";
 
 const AGES_BASE_URL = process.env.HAAGES ?? "http://localhost/ages";
@@ -10,6 +13,12 @@ const WARMUP_MAX_ATTEMPTS = 2;
 const PING_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MINI_SLOTS = 5;
 const DEFAULT_BIGB_SLOTS = 5;
+const AGES_SSH_HOST = process.env.AGES_SSH_HOST ?? getHostFromUrl(AGES_BASE_URL);
+const AGES_SSH_USER = process.env.AGES_SSH_USER ?? "";
+const AGES_SSH_KEY_PATH = process.env.AGES_SSH_KEY_PATH ?? "/app/keys/ch09_brk_iis";
+const AGES_SSH_RESTART_COMMAND =
+  process.env.AGES_SSH_RESTART_COMMAND ?? "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
+const execFileAsync = promisify(execFile);
 
 type AgesPoolSlotStatus = "idle" | "warming" | "ready" | "error";
 type AgesPoolSlotKind = "bigb" | "mini";
@@ -74,6 +83,7 @@ export class AgesConnectionPool {
   private warmupPromise?: Promise<AgesPoolSummary>;
   private pingMonitor?: NodeJS.Timeout;
   private pingSweepRunning = false;
+  private agesHostRestartRunning = false;
 
   constructor(
     private readonly baseUrl: string = AGES_BASE_URL,
@@ -179,6 +189,17 @@ export class AgesConnectionPool {
     return this.getSummary();
   }
 
+  async restartAgesHostManually(): Promise<{ status: string; host: string; reason: string }> {
+    const reason = "manual_iis_restart";
+    const restarted = await this.restartAgesHost(reason);
+
+    return {
+      status: restarted ? "ok" : "error",
+      host: AGES_SSH_HOST,
+      reason
+    };
+  }
+
   async proxyCall(
     kind: AgesPoolSlotKind,
     functionName: string,
@@ -187,8 +208,8 @@ export class AgesConnectionPool {
     sourceIp: string = "",
     sourceIpSource: string = ""
   ): Promise<AgesProxyResult> {
-    if (!this.isReady()) {
-      throw new Error("AGES pool is still in warmup");
+    if (!this.isReady(kind)) {
+      throw new Error(`AGES ${kind} pool is still in warmup`);
     }
 
     const slot = this.getNextReadySlot(kind);
@@ -207,6 +228,10 @@ export class AgesConnectionPool {
 
     const body = Buffer.from(await response.arrayBuffer());
     this.recordSlotUse(slot, agesUrl, body);
+
+    if (this.isDllInitError(response.status, body)) {
+      await this.restartAgesHost("dll_init_error");
+    }
 
     const recycleReason = this.getRecycleReason(response.status, body);
 
@@ -557,8 +582,10 @@ export class AgesConnectionPool {
     return slot;
   }
 
-  private isReady(): boolean {
-    return this.slots.length > 0 && this.slots.every((slot) => slot.status === "ready");
+  private isReady(kind: AgesPoolSlotKind): boolean {
+    const slots = this.slots.filter((slot) => slot.kind === kind);
+
+    return slots.length > 0 && slots.every((slot) => slot.status === "ready");
   }
 
   private buildFunctionEndpoint(kind: AgesPoolSlotKind, functionName: string): string {
@@ -620,6 +647,84 @@ export class AgesConnectionPool {
 
     return "";
   }
+
+  private isDllInitError(status: number, body: Buffer): boolean {
+    if (status !== 503) {
+      return false;
+    }
+
+    try {
+      const payload = JSON.parse(body.toString("utf8")) as { error?: string };
+      return payload.error === "dll_init_error";
+    } catch {
+      return /"error"\s*:\s*"dll_init_error"/i.test(body.toString("utf8"));
+    }
+  }
+
+  private async restartAgesHost(reason: string): Promise<boolean> {
+    if (this.agesHostRestartRunning) {
+      warn(`ages restart skip | reason=${reason} | err=restart already running`);
+      return false;
+    }
+
+    if (!AGES_SSH_HOST || !AGES_SSH_USER) {
+      warn(`ages restart skip | reason=${reason} | err=missing AGES_SSH_HOST or AGES_SSH_USER`);
+      return false;
+    }
+
+    this.agesHostRestartRunning = true;
+    warn(`ages restart start | host=${AGES_SSH_HOST} | user=${AGES_SSH_USER} | reason=${reason}`);
+
+    try {
+      await execFileAsync("ssh", [
+        "-i",
+        AGES_SSH_KEY_PATH,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        `${AGES_SSH_USER}@${AGES_SSH_HOST}`,
+        AGES_SSH_RESTART_COMMAND
+      ]);
+      log(`ages restart ok | host=${AGES_SSH_HOST} | reason=${reason}`);
+      await this.resetPoolForWarmup(`host restart ${reason}`);
+      void this.warmUp();
+      return true;
+    } catch (error) {
+      warn(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${formatError(error)}`);
+      return false;
+    } finally {
+      this.agesHostRestartRunning = false;
+    }
+  }
+
+  private async resetPoolForWarmup(reason: string): Promise<void> {
+    warn(`warmup reset | reason=${reason}`);
+
+    this.slots.forEach((slot) => {
+      slot.agesToken = "";
+      slot.aspNetSessionId = "";
+      slot.warmupResponse = "";
+      slot.status = "idle";
+      slot.lastError = reason;
+    });
+  }
+}
+
+function getHostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function createInitialEndpoints(): AgesPoolEndpoint[] {

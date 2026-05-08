@@ -14,10 +14,11 @@ app.use(["/foreign/broker/ages", "/ages"], raw({ type: "*/*" }));
 app.use(json());
 app.disable("x-powered-by");
 app.use(getFullCors());
-app.use(doorMan.getSession.bind(doorMan));
 
 app.use("/foreign/broker", BrokerRouter);
 app.use("/ages", BrokerRouter);
+
+app.use(doorMan.getSession.bind(doorMan));
 
 app.get("/foreign", (_req, res) => {
   res.send("Hello from CH09-BRK - Broker !!!");

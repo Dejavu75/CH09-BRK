@@ -1,5 +1,5 @@
 services:
-  ch08:
+  ch09:
     image: dhzacur/ha_ch09_brk
     container_name: ch09-brk
     hostname: ch09-brk
@@ -9,6 +9,9 @@ services:
       -  ${LOG_PATH}:/etc/ch09-brk/logs
       -  ${CONFIG_PATH}/.env:/app/.env
       -  ${CERT_PATH}:/app/certificados      
+      -  ${SSH_PUBLIC_KEY_HOST_PATH}:/app/ssh-public
+    environment:
+      SSH_PUBLIC_KEY_EXPORT_PATH: /app/ssh-public
     networks:
       habitatzone:
         ipv4_address: 172.30.0.248

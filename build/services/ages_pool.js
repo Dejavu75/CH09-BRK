@@ -8,10 +8,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var _a;
+var _a, _b, _c, _d, _e;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.agesConnectionPool = exports.AgesConnectionPool = void 0;
 require("dotenv/config");
+const child_process_1 = require("child_process");
+const util_1 = require("util");
 const logger_1 = require("../utils/logger");
 const AGES_BASE_URL = (_a = process.env.HAAGES) !== null && _a !== void 0 ? _a : "http://localhost/ages";
 const ASP_NET_SESSION_COOKIE = "ASP.NET_SessionId";
@@ -21,12 +23,18 @@ const WARMUP_MAX_ATTEMPTS = 2;
 const PING_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MINI_SLOTS = 5;
 const DEFAULT_BIGB_SLOTS = 5;
+const AGES_SSH_HOST = (_b = process.env.AGES_SSH_HOST) !== null && _b !== void 0 ? _b : getHostFromUrl(AGES_BASE_URL);
+const AGES_SSH_USER = (_c = process.env.AGES_SSH_USER) !== null && _c !== void 0 ? _c : "";
+const AGES_SSH_KEY_PATH = (_d = process.env.AGES_SSH_KEY_PATH) !== null && _d !== void 0 ? _d : "/app/keys/ch09_brk_iis";
+const AGES_SSH_RESTART_COMMAND = (_e = process.env.AGES_SSH_RESTART_COMMAND) !== null && _e !== void 0 ? _e : "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
+const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 const initialEndpoints = createInitialEndpoints();
 class AgesConnectionPool {
     constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints) {
         this.baseUrl = baseUrl;
         this.nextSlotIndex = 0;
         this.pingSweepRunning = false;
+        this.agesHostRestartRunning = false;
         this.slots = endpoints.map((item, index) => ({
             id: index + 1,
             kind: item.kind,
@@ -117,11 +125,22 @@ class AgesConnectionPool {
             return this.getSummary();
         });
     }
+    restartAgesHostManually() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const reason = "manual_iis_restart";
+            const restarted = yield this.restartAgesHost(reason);
+            return {
+                status: restarted ? "ok" : "error",
+                host: AGES_SSH_HOST,
+                reason
+            };
+        });
+    }
     proxyCall(kind_1, functionName_1) {
         return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "") {
             var _a;
-            if (!this.isReady()) {
-                throw new Error("AGES pool is still in warmup");
+            if (!this.isReady(kind)) {
+                throw new Error(`AGES ${kind} pool is still in warmup`);
             }
             const slot = this.getNextReadySlot(kind);
             const endpoint = this.buildFunctionEndpoint(kind, functionName);
@@ -132,6 +151,9 @@ class AgesConnectionPool {
             slot.lastStatusCode = response.status;
             const body = Buffer.from(yield response.arrayBuffer());
             this.recordSlotUse(slot, agesUrl, body);
+            if (this.isDllInitError(response.status, body)) {
+                yield this.restartAgesHost("dll_init_error");
+            }
             const recycleReason = this.getRecycleReason(response.status, body);
             if (recycleReason) {
                 slot.lastError = recycleReason;
@@ -421,8 +443,9 @@ class AgesConnectionPool {
         this.nextSlotIndex = (this.nextSlotIndex + 1) % readySlots.length;
         return slot;
     }
-    isReady() {
-        return this.slots.length > 0 && this.slots.every((slot) => slot.status === "ready");
+    isReady(kind) {
+        const slots = this.slots.filter((slot) => slot.kind === kind);
+        return slots.length > 0 && slots.every((slot) => slot.status === "ready");
     }
     buildFunctionEndpoint(kind, functionName) {
         const normalizedFunctionName = functionName.replace(/^\/+/, "");
@@ -471,8 +494,83 @@ class AgesConnectionPool {
         }
         return "";
     }
+    isDllInitError(status, body) {
+        if (status !== 503) {
+            return false;
+        }
+        try {
+            const payload = JSON.parse(body.toString("utf8"));
+            return payload.error === "dll_init_error";
+        }
+        catch (_a) {
+            return /"error"\s*:\s*"dll_init_error"/i.test(body.toString("utf8"));
+        }
+    }
+    restartAgesHost(reason) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.agesHostRestartRunning) {
+                (0, logger_1.warn)(`ages restart skip | reason=${reason} | err=restart already running`);
+                return false;
+            }
+            if (!AGES_SSH_HOST || !AGES_SSH_USER) {
+                (0, logger_1.warn)(`ages restart skip | reason=${reason} | err=missing AGES_SSH_HOST or AGES_SSH_USER`);
+                return false;
+            }
+            this.agesHostRestartRunning = true;
+            (0, logger_1.warn)(`ages restart start | host=${AGES_SSH_HOST} | user=${AGES_SSH_USER} | reason=${reason}`);
+            try {
+                yield execFileAsync("ssh", [
+                    "-i",
+                    AGES_SSH_KEY_PATH,
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "StrictHostKeyChecking=accept-new",
+                    `${AGES_SSH_USER}@${AGES_SSH_HOST}`,
+                    AGES_SSH_RESTART_COMMAND
+                ]);
+                (0, logger_1.log)(`ages restart ok | host=${AGES_SSH_HOST} | reason=${reason}`);
+                yield this.resetPoolForWarmup(`host restart ${reason}`);
+                void this.warmUp();
+                return true;
+            }
+            catch (error) {
+                (0, logger_1.warn)(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${formatError(error)}`);
+                return false;
+            }
+            finally {
+                this.agesHostRestartRunning = false;
+            }
+        });
+    }
+    resetPoolForWarmup(reason) {
+        return __awaiter(this, void 0, void 0, function* () {
+            (0, logger_1.warn)(`warmup reset | reason=${reason}`);
+            this.slots.forEach((slot) => {
+                slot.agesToken = "";
+                slot.aspNetSessionId = "";
+                slot.warmupResponse = "";
+                slot.status = "idle";
+                slot.lastError = reason;
+            });
+        });
+    }
 }
 exports.AgesConnectionPool = AgesConnectionPool;
+function getHostFromUrl(url) {
+    try {
+        return new URL(url).hostname;
+    }
+    catch (_a) {
+        return "";
+    }
+}
+function formatError(error) {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    return String(error);
+}
 function createInitialEndpoints() {
     return [
         ...Array(getEnvSlotCount("slots_mini", DEFAULT_MINI_SLOTS)).fill({

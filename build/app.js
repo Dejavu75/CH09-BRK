@@ -49,9 +49,9 @@ app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: "*/*" }));
 app.use((0, express_1.json)());
 app.disable("x-powered-by");
 app.use((0, se_configbase_1.getFullCors)());
-app.use(doorMan.getSession.bind(doorMan));
 app.use("/foreign/broker", rou_broker_1.BrokerRouter);
 app.use("/ages", rou_broker_1.BrokerRouter);
+app.use(doorMan.getSession.bind(doorMan));
 app.get("/foreign", (_req, res) => {
     res.send("Hello from CH09-BRK - Broker !!!");
 });
