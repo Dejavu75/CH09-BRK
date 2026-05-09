@@ -203,6 +203,7 @@ class AgesConnectionPool {
     }
     initializeSlot(slot) {
         return __awaiter(this, void 0, void 0, function* () {
+            this.clearSlotForWarmup(slot);
             slot.status = "warming";
             slot.lastError = undefined;
             for (let attempt = 1; attempt <= WARMUP_MAX_ATTEMPTS; attempt++) {
@@ -299,9 +300,7 @@ class AgesConnectionPool {
                 `u=${this.formatUrl(pingUrl)}`,
                 `err=${(_a = slot.lastError) !== null && _a !== void 0 ? _a : "unknown"}`
             ].join(" | "));
-            slot.agesToken = "";
-            slot.aspNetSessionId = "";
-            slot.warmupResponse = "";
+            this.clearSlotForWarmup(slot);
             slot.status = "idle";
             const recycledStatus = yield this.initializeSlot(slot);
             if (recycledStatus === "ready") {
@@ -543,6 +542,15 @@ class AgesConnectionPool {
         slot.lastEndpoint = this.formatUrl(agesUrl);
         slot.lastUsedAt = new Date().toISOString();
         slot.lastResponsePreview = this.previewBody(body);
+    }
+    clearSlotForWarmup(slot) {
+        slot.agesToken = "";
+        slot.aspNetSessionId = "";
+        slot.warmupResponse = "";
+        slot.lastResponsePreview = undefined;
+        slot.lastEndpoint = undefined;
+        slot.lastUsedAt = undefined;
+        slot.lastStatusCode = undefined;
     }
     previewBody(body) {
         return body.toString("utf8").replace(/\s+/g, " ").trim().slice(0, 100);

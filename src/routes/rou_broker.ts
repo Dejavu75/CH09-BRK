@@ -261,6 +261,7 @@ function renderPoolPage(req: Request): string {
   const pool = agesConnectionPool.getSummary();
   const json = escapeHtml(JSON.stringify(pool, null, 2));
   const basePath = req.baseUrl || "";
+  const poolPath = `${basePath}/pool`;
   const restartPath = `${basePath}/iis/restart`;
   const warmupPath = `${basePath}/ages-pool/warmup`;
   const cards = pool.slots.map((slot) => renderSlotCard(basePath, slot)).join("");
@@ -289,7 +290,7 @@ function renderPoolPage(req: Request): string {
     .metric b { display: block; font-size: 24px; margin-bottom: 3px; }
     .metric span { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 18px; }
-    .slot { border: 1px solid #334155; background: #111827; border-radius: 8px; padding: 14px; min-width: 0; }
+    .slot { border: 1px solid #334155; background: #111827; border-radius: 8px; padding: 14px; min-width: 0; display: flex; flex-direction: column; min-height: 390px; }
     .slot-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
     .slot-id { font: 700 18px Consolas, Monaco, monospace; }
     .badge { border-radius: 999px; padding: 4px 8px; font-size: 12px; text-transform: uppercase; }
@@ -300,8 +301,9 @@ function renderPoolPage(req: Request): string {
     dl { margin: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 10px; font-size: 13px; }
     dt { color: #94a3b8; }
     dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: Consolas, Monaco, monospace; }
-    .slot form { margin-top: 12px; }
+    .slot form { margin-top: auto; padding-top: 12px; }
     .slot button { width: 100%; }
+    .statusline { color: #94a3b8; font-size: 13px; margin-top: 10px; min-height: 18px; text-align: right; }
     details { border: 1px solid #334155; background: #111827; border-radius: 8px; padding: 12px; }
     summary { cursor: pointer; color: #93c5fd; }
     pre { margin: 12px 0 0; padding: 14px; background: #020617; border: 1px solid #334155; border-radius: 6px; overflow: auto; line-height: 1.45; font: 12px Consolas, Monaco, monospace; }
@@ -319,27 +321,131 @@ function renderPoolPage(req: Request): string {
     <header>
       <div>
         <h1>CH09-BRK Pool</h1>
-        <div class="base">${escapeHtml(pool.baseUrl)}</div>
+        <div id="base" class="base">${escapeHtml(pool.baseUrl)}</div>
       </div>
       <div class="actions">
-        <form method="post" action="${escapeHtml(warmupPath)}"><button type="submit">Warmup</button></form>
-        <form method="post" action="${escapeHtml(restartPath)}"><button class="danger" type="submit">Restart IIS</button></form>
+        <form data-pool-action method="post" action="${escapeHtml(warmupPath)}"><button type="submit">Warmup</button></form>
+        <form data-pool-action method="post" action="${escapeHtml(restartPath)}"><button class="danger" type="submit">Restart IIS</button></form>
       </div>
     </header>
-    <section class="summary">
-      <div class="metric"><b>${pool.ready}</b><span>Ready</span></div>
-      <div class="metric"><b>${pool.warming}</b><span>Warming</span></div>
-      <div class="metric"><b>${pool.error}</b><span>Error</span></div>
-      <div class="metric"><b>${pool.size}</b><span>Total</span></div>
+    <section class="summary" id="summary">
+      ${renderSummaryMetrics(pool)}
     </section>
-    <section class="grid">${cards}</section>
+    <section class="grid" id="slots">${cards}</section>
+    <div class="statusline" id="statusline">Actualizado al abrir</div>
     <details>
       <summary>JSON completo</summary>
-      <pre>${json}</pre>
+      <pre id="json">${json}</pre>
     </details>
   </main>
+  <script>
+    const poolPath = ${JSON.stringify(poolPath)};
+    const refreshMs = 5000;
+    const statusLine = document.getElementById("statusline");
+    const summary = document.getElementById("summary");
+    const slots = document.getElementById("slots");
+    const json = document.getElementById("json");
+    const base = document.getElementById("base");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function slotName(slot) {
+      return "S" + String(slot.id).padStart(2, "0") + (slot.kind === "mini" ? "M" : "B");
+    }
+
+    function statusText() {
+      return new Date().toLocaleTimeString("es-AR", { hour12: false });
+    }
+
+    function renderSummary(pool) {
+      return [
+        '<div class="metric"><b>' + pool.ready + '</b><span>Ready</span></div>',
+        '<div class="metric"><b>' + pool.warming + '</b><span>Warming</span></div>',
+        '<div class="metric"><b>' + pool.error + '</b><span>Error</span></div>',
+        '<div class="metric"><b>' + pool.size + '</b><span>Total</span></div>'
+      ].join("");
+    }
+
+    function renderSlot(slot) {
+      const name = slotName(slot);
+      const recyclePath = ${JSON.stringify(basePath)} + "/pool/slots/" + name + "/recycle";
+      return '<article class="slot">' +
+        '<div class="slot-head"><div class="slot-id">' + name + '</div><span class="badge ' + escapeHtml(slot.status) + '">' + escapeHtml(slot.status) + '</span></div>' +
+        '<dl>' +
+          '<dt>Kind</dt><dd>' + (slot.kind === "mini" ? "Mini" : "BigBoy") + '</dd>' +
+          '<dt>Status</dt><dd>' + escapeHtml(slot.lastStatusCode ?? "-") + '</dd>' +
+          '<dt>Token</dt><dd>' + escapeHtml(slot.agesToken || "-") + '</dd>' +
+          '<dt>Cookie</dt><dd>' + escapeHtml(slot.aspNetSessionId || "-") + '</dd>' +
+          '<dt>Endpoint</dt><dd>' + escapeHtml(slot.lastEndpoint || "-") + '</dd>' +
+          '<dt>Uso</dt><dd>' + escapeHtml(slot.lastUsedAt || "-") + '</dd>' +
+          '<dt>Error</dt><dd>' + escapeHtml(slot.lastError || "-") + '</dd>' +
+          '<dt>Resp</dt><dd>' + escapeHtml(slot.lastResponsePreview || slot.warmupResponse || "-") + '</dd>' +
+        '</dl>' +
+        '<form data-pool-action method="post" action="' + escapeHtml(recyclePath) + '"><button type="submit">Reciclar slot</button></form>' +
+      '</article>';
+    }
+
+    function renderPool(pool) {
+      base.textContent = pool.baseUrl;
+      summary.innerHTML = renderSummary(pool);
+      slots.innerHTML = pool.slots.map(renderSlot).join("");
+      json.textContent = JSON.stringify(pool, null, 2);
+      statusLine.textContent = "Actualizado " + statusText();
+    }
+
+    async function refreshPool() {
+      const response = await fetch(poolPath, { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("pool status " + response.status);
+      renderPool(await response.json());
+    }
+
+    document.addEventListener("submit", async (event) => {
+      const form = event.target.closest("[data-pool-action]");
+      if (!form) return;
+      event.preventDefault();
+      const button = form.querySelector("button");
+      const previous = button ? button.textContent : "";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Procesando...";
+      }
+      statusLine.textContent = "Ejecutando accion...";
+      try {
+        const response = await fetch(form.action, { method: form.method || "POST", headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error("accion status " + response.status);
+        await refreshPool();
+      } catch (error) {
+        statusLine.textContent = "Error: " + (error && error.message ? error.message : String(error));
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = previous;
+        }
+      }
+    });
+
+    setInterval(() => {
+      refreshPool().catch((error) => {
+        statusLine.textContent = "Error al actualizar: " + (error && error.message ? error.message : String(error));
+      });
+    }, refreshMs);
+  </script>
 </body>
 </html>`;
+}
+
+function renderSummaryMetrics(pool: ReturnType<typeof agesConnectionPool.getSummary>): string {
+  return [
+    `<div class="metric"><b>${pool.ready}</b><span>Ready</span></div>`,
+    `<div class="metric"><b>${pool.warming}</b><span>Warming</span></div>`,
+    `<div class="metric"><b>${pool.error}</b><span>Error</span></div>`,
+    `<div class="metric"><b>${pool.size}</b><span>Total</span></div>`
+  ].join("");
 }
 
 function renderSlotCard(basePath: string, slot: ReturnType<typeof agesConnectionPool.getSummary>["slots"][number]): string {
@@ -361,7 +467,7 @@ function renderSlotCard(basePath: string, slot: ReturnType<typeof agesConnection
       <dt>Error</dt><dd>${escapeHtml(slot.lastError || "-")}</dd>
       <dt>Resp</dt><dd>${escapeHtml(slot.lastResponsePreview || slot.warmupResponse || "-")}</dd>
     </dl>
-    <form method="post" action="${escapeHtml(recyclePath)}">
+    <form data-pool-action method="post" action="${escapeHtml(recyclePath)}">
       <button type="submit">Reciclar slot</button>
     </form>
   </article>`;

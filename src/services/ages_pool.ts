@@ -286,6 +286,7 @@ export class AgesConnectionPool {
   }
 
   private async initializeSlot(slot: AgesPoolSlot): Promise<AgesPoolSlotStatus> {
+    this.clearSlotForWarmup(slot);
     slot.status = "warming";
     slot.lastError = undefined;
 
@@ -395,9 +396,7 @@ export class AgesConnectionPool {
       ].join(" | ")
     );
 
-    slot.agesToken = "";
-    slot.aspNetSessionId = "";
-    slot.warmupResponse = "";
+    this.clearSlotForWarmup(slot);
     slot.status = "idle";
     const recycledStatus = await this.initializeSlot(slot);
 
@@ -711,6 +710,16 @@ export class AgesConnectionPool {
     slot.lastEndpoint = this.formatUrl(agesUrl);
     slot.lastUsedAt = new Date().toISOString();
     slot.lastResponsePreview = this.previewBody(body);
+  }
+
+  private clearSlotForWarmup(slot: AgesPoolSlot): void {
+    slot.agesToken = "";
+    slot.aspNetSessionId = "";
+    slot.warmupResponse = "";
+    slot.lastResponsePreview = undefined;
+    slot.lastEndpoint = undefined;
+    slot.lastUsedAt = undefined;
+    slot.lastStatusCode = undefined;
   }
 
   private previewBody(body: Buffer): string {
