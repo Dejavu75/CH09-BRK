@@ -13,6 +13,7 @@ const WARMUP_MAX_ATTEMPTS = 2;
 const PING_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MINI_SLOTS = 5;
 const DEFAULT_BIGB_SLOTS = 5;
+const ERROR_DEBUG_DETAILS = isConfigEnabled("ERROR_DEBUG_DETAILS", true);
 const AGES_SSH_HOST = process.env.AGES_SSH_HOST ?? getHostFromUrl(AGES_BASE_URL);
 const AGES_SSH_USER = process.env.AGES_SSH_USER ?? "";
 const AGES_SSH_KEY_PATH = process.env.AGES_SSH_KEY_PATH ?? "/app/keys/ch09_brk_iis";
@@ -114,7 +115,18 @@ export class AgesConnectionPool {
   }
 
   private async runWarmUp(): Promise<AgesPoolSummary> {
-    log(`warmup start | n=${this.slots.length}`);
+    log(
+      [
+        `warmup start`,
+        `n=${this.slots.length}`,
+        `mini=${this.slots.filter((slot) => slot.kind === "mini").length}`,
+        `BigBoy=${this.slots.filter((slot) => slot.kind === "bigb").length}`,
+        `base=${this.baseUrl}`,
+        `host=${getHostFromUrl(this.baseUrl) || "unknown"}`,
+        `proto=${getProtocolFromUrl(this.baseUrl) || "unknown"}`,
+        `ssh=${AGES_SSH_HOST || "unset"}`
+      ].join(" | ")
+    );
 
     for (const slot of this.slots) {
       await this.initializeSlot(slot);
@@ -218,16 +230,39 @@ export class AgesConnectionPool {
 
     this.logProxyCall(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource);
 
-    const response = await fetch(agesUrl, {
-      ...init,
-      headers: this.buildSessionHeaders(slot, init.headers)
-    });
+    const requestHeaders = this.buildSessionHeaders(slot, init.headers);
+    let response: Response;
+
+    try {
+      response = await fetch(agesUrl, {
+        ...init,
+        headers: requestHeaders
+      });
+    } catch (error) {
+      slot.lastError = formatError(error);
+      this.logProxyError(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, {
+        error,
+        requestHeaders,
+        requestBodySize: getBodySize(init.body)
+      });
+      throw error;
+    }
 
     this.captureSessionState(slot, response);
     slot.lastStatusCode = response.status;
 
     const body = Buffer.from(await response.arrayBuffer());
     this.recordSlotUse(slot, agesUrl, body);
+
+    if (response.status >= 400) {
+      this.logProxyError(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, {
+        status: response.status,
+        responseHeaders: this.responseHeadersToObject(response.headers),
+        responsePreview: this.previewBody(body),
+        requestHeaders,
+        requestBodySize: getBodySize(init.body)
+      });
+    }
 
     if (this.isDllInitError(response.status, body)) {
       await this.restartAgesHost("dll_init_error");
@@ -445,6 +480,50 @@ export class AgesConnectionPool {
     );
   }
 
+  private logProxyError(
+    slot: AgesPoolSlot,
+    method: string,
+    url: string,
+    sourceIp: string,
+    sourceIpSource: string,
+    detail: {
+      error?: unknown;
+      status?: number;
+      responseHeaders?: Record<string, string | string[]>;
+      responsePreview?: string;
+      requestHeaders?: Record<string, string>;
+      requestBodySize?: number;
+    }
+  ): void {
+    warn(
+      (ERROR_DEBUG_DETAILS
+        ? [
+        `proxy err`,
+        this.formatSlot(slot),
+        `ip=${sourceIp || "unknown"}`,
+        `ips=${sourceIpSource || "unknown"}`,
+        `m=${method}`,
+        `u=${this.formatUrl(url)}`,
+        `st=${detail.status ?? "fetch-fail"}`,
+        `rb=${detail.requestBodySize ?? 0}`,
+        `reqh=${this.formatHeaderNames(detail.requestHeaders)}`,
+        detail.responseHeaders ? `resh=${this.formatHeaderNames(detail.responseHeaders)}` : "",
+        detail.responsePreview ? `resp=${detail.responsePreview}` : "",
+        detail.error ? `err=${formatError(detail.error)}` : ""
+      ]
+        : [
+          `proxy err`,
+          this.formatSlot(slot),
+          `m=${method}`,
+          `u=${this.formatUrl(url)}`,
+          `st=${detail.status ?? "fetch-fail"}`,
+          detail.error ? `err=${shortError(detail.error)}` : ""
+        ])
+        .filter(Boolean)
+        .join(" | ")
+    );
+  }
+
   private logSlotRetry(slot: AgesPoolSlot, nextAttempt: number): void {
     warn(
       [
@@ -631,7 +710,17 @@ export class AgesConnectionPool {
   private recordSlotUse(slot: AgesPoolSlot, agesUrl: string, body: Buffer): void {
     slot.lastEndpoint = this.formatUrl(agesUrl);
     slot.lastUsedAt = new Date().toISOString();
-    slot.lastResponsePreview = body.toString("utf8").slice(0, 100);
+    slot.lastResponsePreview = this.previewBody(body);
+  }
+
+  private previewBody(body: Buffer): string {
+    return body.toString("utf8").replace(/\s+/g, " ").trim().slice(0, 100);
+  }
+
+  private formatHeaderNames(headers?: Record<string, string | string[]>): string {
+    const names = Object.keys(headers ?? {}).sort();
+
+    return names.length > 0 ? names.join(",") : "none";
   }
 
   private getRecycleReason(status: number, body: Buffer): string {
@@ -719,12 +808,62 @@ function getHostFromUrl(url: string): string {
   }
 }
 
+function getProtocolFromUrl(url: string): string {
+  try {
+    return new URL(url).protocol.replace(/:$/, "");
+  } catch {
+    return "";
+  }
+}
+
 function formatError(error: unknown): string {
   if (error instanceof Error) {
-    return error.message;
+    const details = [
+      error.name,
+      error.message,
+      getErrorCause(error),
+      error.stack ? `stack=${error.stack.split("\n").slice(0, 3).join(" <- ")}` : ""
+    ].filter(Boolean);
+
+    return details.join(" | ");
   }
 
   return String(error);
+}
+
+function getErrorCause(error: Error): string {
+  const withCause = error as Error & { cause?: unknown };
+
+  if (!withCause.cause) {
+    return "";
+  }
+
+  if (withCause.cause instanceof Error) {
+    const causeWithCode = withCause.cause as Error & { code?: string };
+    return `cause=${causeWithCode.name}:${causeWithCode.message}${causeWithCode.code ? ` code=${causeWithCode.code}` : ""}`;
+  }
+
+  return `cause=${String(withCause.cause)}`;
+}
+
+function getBodySize(body: BodyInit | null | undefined): number {
+  if (!body) {
+    return 0;
+  }
+
+  if (typeof body === "string") {
+    return Buffer.byteLength(body);
+  }
+
+  if (Buffer.isBuffer(body)) {
+    return body.length;
+  }
+
+  if (body instanceof URLSearchParams) {
+    return Buffer.byteLength(body.toString());
+  }
+
+  return 0;
 }
 
 function createInitialEndpoints(): AgesPoolEndpoint[] {
@@ -755,6 +894,20 @@ function getEnvSlotCount(envName: string, fallback: number): number {
   }
 
   return value;
+}
+
+function isConfigEnabled(name: string, fallback = false): boolean {
+  const rawValue = process.env[name];
+
+  if (rawValue === undefined) {
+    return fallback;
+  }
+
+  return ["1", "true", "yes", "on", "enabled"].includes(rawValue.trim().toLowerCase());
+}
+
+function shortError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export const agesConnectionPool = new AgesConnectionPool();

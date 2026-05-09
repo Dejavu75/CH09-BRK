@@ -1,6 +1,7 @@
 import { Request, Response, Router } from "express";
 
 import { agesConnectionPool } from "../services/ages_pool";
+import { warn } from "../utils/logger";
 
 export const BrokerRouter = Router();
 
@@ -23,12 +24,12 @@ BrokerRouter.get("/pool", (_req, res) => {
   res.json(agesConnectionPool.getSummary());
 });
 
-BrokerRouter.get("/ages-pool/show", (_req, res) => {
-  res.type("html").send(renderPoolPage());
+BrokerRouter.get("/ages-pool/show", (req, res) => {
+  res.type("html").send(renderPoolPage(req));
 });
 
-BrokerRouter.get("/pool/show", (_req, res) => {
-  res.type("html").send(renderPoolPage());
+BrokerRouter.get("/pool/show", (req, res) => {
+  res.type("html").send(renderPoolPage(req));
 });
 
 BrokerRouter.post("/ages-pool/warmup", async (_req, res) => {
@@ -48,6 +49,14 @@ BrokerRouter.post("/ages-host/restart-iis", async (_req, res) => {
 });
 
 BrokerRouter.post("/iis/restart", async (_req, res) => {
+  await restartIis(res);
+});
+
+BrokerRouter.get("/ages-host/restart-iis", async (_req, res) => {
+  await restartIis(res);
+});
+
+BrokerRouter.get("/iis/restart", async (_req, res) => {
   await restartIis(res);
 });
 
@@ -106,6 +115,21 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       .setHeader("X-CH09-BRK-Pool-Kind", result.slotKind)
       .send(result.body);
   } catch (error) {
+    const sourceIp = getSourceIp(req);
+    warn(
+      [
+        `proxy route err`,
+        `kind=${kind}`,
+        `ip=${sourceIp.value || "unknown"}`,
+        `ips=${sourceIp.source || "unknown"}`,
+        `m=${req.method}`,
+        `u=${req.originalUrl}`,
+        `h=${Object.keys(req.headers).sort().join(",") || "none"}`,
+        `b=${getRequestBodySize(req)}`,
+        `err=${formatRouteError(error)}`
+      ].join(" | ")
+    );
+
     if (error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message)) {
       res.status(503).json({
         status: "warmup",
@@ -199,6 +223,30 @@ function getProxyBody(req: Request): BodyInit | undefined {
   return JSON.stringify(req.body);
 }
 
+function getRequestBodySize(req: Request): number {
+  if (Buffer.isBuffer(req.body)) {
+    return req.body.length;
+  }
+
+  if (typeof req.body === "string") {
+    return Buffer.byteLength(req.body);
+  }
+
+  if (req.body === undefined) {
+    return 0;
+  }
+
+  return Buffer.byteLength(JSON.stringify(req.body));
+}
+
+function formatRouteError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}:${error.message}`;
+  }
+
+  return String(error);
+}
+
 function setProxyResponseHeaders(res: Response, headers: Record<string, string | string[]>): void {
   const ignoredHeaders = new Set(["connection", "content-encoding", "content-length", "transfer-encoding"]);
 
@@ -209,9 +257,13 @@ function setProxyResponseHeaders(res: Response, headers: Record<string, string |
   });
 }
 
-function renderPoolPage(): string {
+function renderPoolPage(req: Request): string {
   const pool = agesConnectionPool.getSummary();
   const json = escapeHtml(JSON.stringify(pool, null, 2));
+  const basePath = req.baseUrl || "";
+  const restartPath = `${basePath}/iis/restart`;
+  const warmupPath = `${basePath}/ages-pool/warmup`;
+  const cards = pool.slots.map((slot) => renderSlotCard(basePath, slot)).join("");
 
   return `<!doctype html>
 <html lang="es">
@@ -220,21 +272,99 @@ function renderPoolPage(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CH09-BRK Pool</title>
   <style>
-    body { margin: 0; font-family: Consolas, Monaco, monospace; background: #111827; color: #e5e7eb; }
-    main { padding: 24px; }
-    h1 { margin: 0 0 12px; font-size: 20px; font-family: Arial, sans-serif; }
-    .summary { margin-bottom: 16px; color: #93c5fd; font-family: Arial, sans-serif; }
-    pre { margin: 0; padding: 16px; background: #020617; border: 1px solid #334155; border-radius: 6px; overflow: auto; line-height: 1.45; }
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #0f172a; color: #e5e7eb; }
+    main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
+    h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.1; }
+    .base { color: #94a3b8; font-size: 13px; overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    button { border: 1px solid #475569; background: #1e293b; color: #f8fafc; border-radius: 6px; padding: 9px 12px; font-size: 13px; cursor: pointer; }
+    button:hover { background: #334155; }
+    .danger { border-color: #b91c1c; background: #7f1d1d; }
+    .danger:hover { background: #991b1b; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .metric { border: 1px solid #334155; background: #111827; border-radius: 8px; padding: 12px; }
+    .metric b { display: block; font-size: 24px; margin-bottom: 3px; }
+    .metric span { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .slot { border: 1px solid #334155; background: #111827; border-radius: 8px; padding: 14px; min-width: 0; }
+    .slot-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .slot-id { font: 700 18px Consolas, Monaco, monospace; }
+    .badge { border-radius: 999px; padding: 4px 8px; font-size: 12px; text-transform: uppercase; }
+    .ready { background: #064e3b; color: #bbf7d0; }
+    .warming { background: #713f12; color: #fde68a; }
+    .error { background: #7f1d1d; color: #fecaca; }
+    .idle { background: #334155; color: #cbd5e1; }
+    dl { margin: 0; display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 10px; font-size: 13px; }
+    dt { color: #94a3b8; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: Consolas, Monaco, monospace; }
+    .slot form { margin-top: 12px; }
+    .slot button { width: 100%; }
+    details { border: 1px solid #334155; background: #111827; border-radius: 8px; padding: 12px; }
+    summary { cursor: pointer; color: #93c5fd; }
+    pre { margin: 12px 0 0; padding: 14px; background: #020617; border: 1px solid #334155; border-radius: 6px; overflow: auto; line-height: 1.45; font: 12px Consolas, Monaco, monospace; }
+    @media (max-width: 720px) {
+      main { padding: 16px; }
+      header { display: block; }
+      .actions { justify-content: stretch; margin-top: 14px; }
+      .actions form, .actions button { width: 100%; }
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
   </style>
 </head>
 <body>
   <main>
-    <h1>CH09-BRK Pool</h1>
-    <div class="summary">ready ${pool.ready}/${pool.size} | warming ${pool.warming} | error ${pool.error}</div>
-    <pre>${json}</pre>
+    <header>
+      <div>
+        <h1>CH09-BRK Pool</h1>
+        <div class="base">${escapeHtml(pool.baseUrl)}</div>
+      </div>
+      <div class="actions">
+        <form method="post" action="${escapeHtml(warmupPath)}"><button type="submit">Warmup</button></form>
+        <form method="post" action="${escapeHtml(restartPath)}"><button class="danger" type="submit">Restart IIS</button></form>
+      </div>
+    </header>
+    <section class="summary">
+      <div class="metric"><b>${pool.ready}</b><span>Ready</span></div>
+      <div class="metric"><b>${pool.warming}</b><span>Warming</span></div>
+      <div class="metric"><b>${pool.error}</b><span>Error</span></div>
+      <div class="metric"><b>${pool.size}</b><span>Total</span></div>
+    </section>
+    <section class="grid">${cards}</section>
+    <details>
+      <summary>JSON completo</summary>
+      <pre>${json}</pre>
+    </details>
   </main>
 </body>
 </html>`;
+}
+
+function renderSlotCard(basePath: string, slot: ReturnType<typeof agesConnectionPool.getSummary>["slots"][number]): string {
+  const slotName = `S${slot.id.toString().padStart(2, "0")}${slot.kind === "mini" ? "M" : "B"}`;
+  const recyclePath = `${basePath}/pool/slots/${slotName}/recycle`;
+
+  return `<article class="slot">
+    <div class="slot-head">
+      <div class="slot-id">${slotName}</div>
+      <span class="badge ${escapeHtml(slot.status)}">${escapeHtml(slot.status)}</span>
+    </div>
+    <dl>
+      <dt>Kind</dt><dd>${slot.kind === "mini" ? "Mini" : "BigBoy"}</dd>
+      <dt>Status</dt><dd>${slot.lastStatusCode ?? "-"}</dd>
+      <dt>Token</dt><dd>${escapeHtml(slot.agesToken || "-")}</dd>
+      <dt>Cookie</dt><dd>${escapeHtml(slot.aspNetSessionId || "-")}</dd>
+      <dt>Endpoint</dt><dd>${escapeHtml(slot.lastEndpoint || "-")}</dd>
+      <dt>Uso</dt><dd>${escapeHtml(slot.lastUsedAt || "-")}</dd>
+      <dt>Error</dt><dd>${escapeHtml(slot.lastError || "-")}</dd>
+      <dt>Resp</dt><dd>${escapeHtml(slot.lastResponsePreview || slot.warmupResponse || "-")}</dd>
+    </dl>
+    <form method="post" action="${escapeHtml(recyclePath)}">
+      <button type="submit">Reciclar slot</button>
+    </form>
+  </article>`;
 }
 
 function escapeHtml(value: string): string {

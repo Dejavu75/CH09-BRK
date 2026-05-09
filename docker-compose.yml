@@ -6,7 +6,7 @@ services:
     ports:
       -  ${HOST_PORT}:${CONTAINER_PORT}
     volumes:
-      -  ${LOG_PATH}:/etc/ch09-brk/logs
+      -  ${LOG_PATH}:/etc/nages2/logdir
       -  ${CONFIG_PATH}/.env:/app/.env
       -  ${CERT_PATH}:/app/certificados      
       -  ${SSH_PUBLIC_KEY_HOST_PATH}:/app/ssh-public

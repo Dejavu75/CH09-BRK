@@ -23,6 +23,7 @@ const WARMUP_MAX_ATTEMPTS = 2;
 const PING_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MINI_SLOTS = 5;
 const DEFAULT_BIGB_SLOTS = 5;
+const ERROR_DEBUG_DETAILS = isConfigEnabled("ERROR_DEBUG_DETAILS", true);
 const AGES_SSH_HOST = (_b = process.env.AGES_SSH_HOST) !== null && _b !== void 0 ? _b : getHostFromUrl(AGES_BASE_URL);
 const AGES_SSH_USER = (_c = process.env.AGES_SSH_USER) !== null && _c !== void 0 ? _c : "";
 const AGES_SSH_KEY_PATH = (_d = process.env.AGES_SSH_KEY_PATH) !== null && _d !== void 0 ? _d : "/app/keys/ch09_brk_iis";
@@ -60,7 +61,16 @@ class AgesConnectionPool {
     runWarmUp() {
         return __awaiter(this, void 0, void 0, function* () {
             var _a;
-            (0, logger_1.log)(`warmup start | n=${this.slots.length}`);
+            (0, logger_1.log)([
+                `warmup start`,
+                `n=${this.slots.length}`,
+                `mini=${this.slots.filter((slot) => slot.kind === "mini").length}`,
+                `BigBoy=${this.slots.filter((slot) => slot.kind === "bigb").length}`,
+                `base=${this.baseUrl}`,
+                `host=${getHostFromUrl(this.baseUrl) || "unknown"}`,
+                `proto=${getProtocolFromUrl(this.baseUrl) || "unknown"}`,
+                `ssh=${AGES_SSH_HOST || "unset"}`
+            ].join(" | "));
             for (const slot of this.slots) {
                 yield this.initializeSlot(slot);
                 if (slot.status !== "ready") {
@@ -138,7 +148,7 @@ class AgesConnectionPool {
     }
     proxyCall(kind_1, functionName_1) {
         return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "") {
-            var _a;
+            var _a, _b, _c;
             if (!this.isReady(kind)) {
                 throw new Error(`AGES ${kind} pool is still in warmup`);
             }
@@ -146,11 +156,33 @@ class AgesConnectionPool {
             const endpoint = this.buildFunctionEndpoint(kind, functionName);
             const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
             this.logProxyCall(slot, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", agesUrl, sourceIp, sourceIpSource);
-            const response = yield fetch(agesUrl, Object.assign(Object.assign({}, init), { headers: this.buildSessionHeaders(slot, init.headers) }));
+            const requestHeaders = this.buildSessionHeaders(slot, init.headers);
+            let response;
+            try {
+                response = yield fetch(agesUrl, Object.assign(Object.assign({}, init), { headers: requestHeaders }));
+            }
+            catch (error) {
+                slot.lastError = formatError(error);
+                this.logProxyError(slot, (_b = init.method) !== null && _b !== void 0 ? _b : "GET", agesUrl, sourceIp, sourceIpSource, {
+                    error,
+                    requestHeaders,
+                    requestBodySize: getBodySize(init.body)
+                });
+                throw error;
+            }
             this.captureSessionState(slot, response);
             slot.lastStatusCode = response.status;
             const body = Buffer.from(yield response.arrayBuffer());
             this.recordSlotUse(slot, agesUrl, body);
+            if (response.status >= 400) {
+                this.logProxyError(slot, (_c = init.method) !== null && _c !== void 0 ? _c : "GET", agesUrl, sourceIp, sourceIpSource, {
+                    status: response.status,
+                    responseHeaders: this.responseHeadersToObject(response.headers),
+                    responsePreview: this.previewBody(body),
+                    requestHeaders,
+                    requestBodySize: getBodySize(init.body)
+                });
+            }
             if (this.isDllInitError(response.status, body)) {
                 yield this.restartAgesHost("dll_init_error");
             }
@@ -338,6 +370,34 @@ class AgesConnectionPool {
             `u=${formattedUrl}`
         ].join(" | "));
     }
+    logProxyError(slot, method, url, sourceIp, sourceIpSource, detail) {
+        var _a, _b, _c;
+        (0, logger_1.warn)((ERROR_DEBUG_DETAILS
+            ? [
+                `proxy err`,
+                this.formatSlot(slot),
+                `ip=${sourceIp || "unknown"}`,
+                `ips=${sourceIpSource || "unknown"}`,
+                `m=${method}`,
+                `u=${this.formatUrl(url)}`,
+                `st=${(_a = detail.status) !== null && _a !== void 0 ? _a : "fetch-fail"}`,
+                `rb=${(_b = detail.requestBodySize) !== null && _b !== void 0 ? _b : 0}`,
+                `reqh=${this.formatHeaderNames(detail.requestHeaders)}`,
+                detail.responseHeaders ? `resh=${this.formatHeaderNames(detail.responseHeaders)}` : "",
+                detail.responsePreview ? `resp=${detail.responsePreview}` : "",
+                detail.error ? `err=${formatError(detail.error)}` : ""
+            ]
+            : [
+                `proxy err`,
+                this.formatSlot(slot),
+                `m=${method}`,
+                `u=${this.formatUrl(url)}`,
+                `st=${(_c = detail.status) !== null && _c !== void 0 ? _c : "fetch-fail"}`,
+                detail.error ? `err=${shortError(detail.error)}` : ""
+            ])
+            .filter(Boolean)
+            .join(" | "));
+    }
     logSlotRetry(slot, nextAttempt) {
         var _a;
         (0, logger_1.warn)([
@@ -482,7 +542,14 @@ class AgesConnectionPool {
     recordSlotUse(slot, agesUrl, body) {
         slot.lastEndpoint = this.formatUrl(agesUrl);
         slot.lastUsedAt = new Date().toISOString();
-        slot.lastResponsePreview = body.toString("utf8").slice(0, 100);
+        slot.lastResponsePreview = this.previewBody(body);
+    }
+    previewBody(body) {
+        return body.toString("utf8").replace(/\s+/g, " ").trim().slice(0, 100);
+    }
+    formatHeaderNames(headers) {
+        const names = Object.keys(headers !== null && headers !== void 0 ? headers : {}).sort();
+        return names.length > 0 ? names.join(",") : "none";
     }
     getRecycleReason(status, body) {
         if (status >= 500) {
@@ -565,11 +632,51 @@ function getHostFromUrl(url) {
         return "";
     }
 }
+function getProtocolFromUrl(url) {
+    try {
+        return new URL(url).protocol.replace(/:$/, "");
+    }
+    catch (_a) {
+        return "";
+    }
+}
 function formatError(error) {
     if (error instanceof Error) {
-        return error.message;
+        const details = [
+            error.name,
+            error.message,
+            getErrorCause(error),
+            error.stack ? `stack=${error.stack.split("\n").slice(0, 3).join(" <- ")}` : ""
+        ].filter(Boolean);
+        return details.join(" | ");
     }
     return String(error);
+}
+function getErrorCause(error) {
+    const withCause = error;
+    if (!withCause.cause) {
+        return "";
+    }
+    if (withCause.cause instanceof Error) {
+        const causeWithCode = withCause.cause;
+        return `cause=${causeWithCode.name}:${causeWithCode.message}${causeWithCode.code ? ` code=${causeWithCode.code}` : ""}`;
+    }
+    return `cause=${String(withCause.cause)}`;
+}
+function getBodySize(body) {
+    if (!body) {
+        return 0;
+    }
+    if (typeof body === "string") {
+        return Buffer.byteLength(body);
+    }
+    if (Buffer.isBuffer(body)) {
+        return body.length;
+    }
+    if (body instanceof URLSearchParams) {
+        return Buffer.byteLength(body.toString());
+    }
+    return 0;
 }
 function createInitialEndpoints() {
     return [
@@ -594,5 +701,15 @@ function getEnvSlotCount(envName, fallback) {
         return fallback;
     }
     return value;
+}
+function isConfigEnabled(name, fallback = false) {
+    const rawValue = process.env[name];
+    if (rawValue === undefined) {
+        return fallback;
+    }
+    return ["1", "true", "yes", "on", "enabled"].includes(rawValue.trim().toLowerCase());
+}
+function shortError(error) {
+    return error instanceof Error ? error.message : String(error);
 }
 exports.agesConnectionPool = new AgesConnectionPool();
