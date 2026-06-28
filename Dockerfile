@@ -1,4 +1,4 @@
-FROM node:23-alpine
+FROM node:22-alpine
 WORKDIR /app
 
 # Install git and OpenSSH client tools.
@@ -21,9 +21,6 @@ COPY ./build/ ./build/
 # Copy startup helper that exports the public SSH key to a mounted directory.
 COPY ./docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# Upgrade npm packages
-RUN npm upgrade
 
 # Expose necessary ports
 EXPOSE 3000 80 443
