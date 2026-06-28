@@ -1,0 +1,25 @@
+services:
+  ch09_testing:
+    image: dhzacur/ha_ch09_brk
+    container_name: ch09-brk_testing
+    hostname: ch09-brk_testing
+    ports:
+      -  ${HOST_PORT}:${CONTAINER_PORT}
+      -  ${HOST_SSL_PORT}:${CONTAINER_SSL_PORT}
+    volumes:
+      -  ${LOG_PATH}:/etc/nages2/logdir
+      -  ${CONFIG_PATH}/.env:/app/.env
+      -  ${CERT_PATH}:/app/certificados
+      -  ${SSH_PUBLIC_KEY_HOST_PATH}:/app/ssh-public
+      -  ${CERTBOT_WEBROOT_PATH}:/app/certbot-www
+    environment:
+      SSH_PUBLIC_KEY_EXPORT_PATH: /app/ssh-public
+      CERTBOT_WEBROOT: /app/certbot-www
+      CERT_PATH_CONTAINER: /app/certificados
+    networks:
+      habitatzone:
+        ipv4_address: ${CONTAINER_IP}
+    restart: unless-stopped
+networks:
+  habitatzone:
+    external: true

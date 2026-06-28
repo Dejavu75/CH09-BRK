@@ -1,0 +1,33 @@
+services:
+  ch09:
+    image: dhzacur/ha_ch09_brk
+    container_name: ch09-brk
+    hostname: ch09-brk
+    ports:
+      -  ${HOST_PORT}:${CONTAINER_PORT}
+    volumes:
+      -  ${LOG_PATH}:/etc/nages2/logdir
+      -  ${CONFIG_PATH}/.env:/app/.env
+      -  ${CERT_PATH}:/app/certificados
+      -  ${SSH_PUBLIC_KEY_HOST_PATH}:/app/ssh-public
+      -  ${CERTBOT_WEBROOT_PATH}:/app/certbot-www
+    environment:
+      SSH_PUBLIC_KEY_EXPORT_PATH: /app/ssh-public
+      CERTBOT_WEBROOT: /app/certbot-www
+    networks:
+      habitatzone:
+        ipv4_address: ${CONTAINER_IP}
+    restart: unless-stopped
+  certbot:
+    image: certbot/certbot
+    container_name: ch09-brk-certbot
+    hostname: ch09-brk-certbot
+    entrypoint: /bin/sh
+    volumes:
+      -  ${CERT_PATH}:/etc/letsencrypt
+      -  ${CERTBOT_WEBROOT_PATH}:/var/www/certbot
+    command: -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $$!; done"
+    restart: unless-stopped
+networks:
+  habitatzone:
+    external: true
