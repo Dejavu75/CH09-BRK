@@ -1,137 +1,653 @@
 {
   "info": {
     "name": "CH09-BRK",
+    "description": "CH09-BRK AGES Broker API\n\nBase URL: {{fullhost}}. fullhost = {{protocolo}}{{host}}{{puerto}}.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "variable": [
-    {
-      "key": "baseUrl",
-      "value": "http://localhost:43080",
-      "type": "string"
-    }
-  ],
   "item": [
     {
-      "name": "App Root",
+      "name": "GET /",
       "request": {
         "method": "GET",
-        "header": [],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
         "url": {
-          "raw": "{{baseUrl}}/",
+          "raw": "{{fullhost}}/",
           "host": [
-            "{{baseUrl}}"
+            "{{fullhost}}"
           ],
-          "path": [
-            ""
-          ]
-        }
+          "path": []
+        },
+        "description": "Root greeting"
       }
     },
     {
-      "name": "Foreign Root",
+      "name": "GET /foreign",
       "request": {
         "method": "GET",
-        "header": [],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
         "url": {
-          "raw": "{{baseUrl}}/foreign",
+          "raw": "{{fullhost}}/foreign",
           "host": [
-            "{{baseUrl}}"
+            "{{fullhost}}"
           ],
           "path": [
             "foreign"
           ]
-        }
+        },
+        "description": "Foreign broker greeting"
       }
     },
     {
-      "name": "Broker Root",
+      "name": "GET /foreign/broker/",
       "request": {
         "method": "GET",
-        "header": [],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
         "url": {
-          "raw": "{{baseUrl}}/foreign/broker",
+          "raw": "{{fullhost}}/foreign/broker/",
           "host": [
-            "{{baseUrl}}"
+            "{{fullhost}}"
           ],
           "path": [
             "foreign",
             "broker"
           ]
-        }
+        },
+        "description": "Broker greeting"
       }
     },
     {
-      "name": "Broker Health",
+      "name": "GET /foreign/broker/health",
       "request": {
         "method": "GET",
-        "header": [],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
         "url": {
-          "raw": "{{baseUrl}}/foreign/broker/health",
+          "raw": "{{fullhost}}/foreign/broker/health",
           "host": [
-            "{{baseUrl}}"
+            "{{fullhost}}"
           ],
           "path": [
             "foreign",
             "broker",
             "health"
           ]
-        }
+        },
+        "description": "Broker health"
       }
     },
     {
-      "name": "AGES Pool",
+      "name": "GET /foreign/broker/pool",
       "request": {
         "method": "GET",
-        "header": [],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
         "url": {
-          "raw": "{{baseUrl}}/foreign/broker/ages-pool",
+          "raw": "{{fullhost}}/foreign/broker/pool",
           "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "foreign",
-            "broker",
-            "ages-pool"
-          ]
-        }
-      }
-    },
-    {
-      "name": "Pool Alias",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{baseUrl}}/foreign/broker/pool",
-          "host": [
-            "{{baseUrl}}"
+            "{{fullhost}}"
           ],
           "path": [
             "foreign",
             "broker",
             "pool"
           ]
-        }
+        },
+        "description": "Pool summary"
       }
     },
     {
-      "name": "Warm Up AGES Pool",
+      "name": "GET /foreign/broker/pool/timings",
       "request": {
-        "method": "POST",
-        "header": [],
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
         "url": {
-          "raw": "{{baseUrl}}/foreign/broker/ages-pool/warmup",
+          "raw": "{{fullhost}}/foreign/broker/pool/timings",
           "host": [
-            "{{baseUrl}}"
+            "{{fullhost}}"
           ],
           "path": [
             "foreign",
             "broker",
-            "ages-pool",
+            "pool",
+            "timings"
+          ]
+        },
+        "description": "Pool timing traces"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/pool/timings/clear",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/pool/timings/clear",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "pool",
+            "timings",
+            "clear"
+          ]
+        },
+        "description": "Clear pool timing traces"
+      }
+    },
+    {
+      "name": "GET /foreign/broker/pool/timings/show",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/pool/timings/show",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "pool",
+            "timings",
+            "show"
+          ]
+        },
+        "description": "Pool timing HTML view"
+      }
+    },
+    {
+      "name": "GET /foreign/broker/pool/show",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/pool/show",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "pool",
+            "show"
+          ]
+        },
+        "description": "Pool HTML view"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/pool/warmup",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/pool/warmup",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "pool",
             "warmup"
           ]
+        },
+        "description": "Warm up AGES pool"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/pool/slots/:slot/recycle",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/pool/slots/{{slot}}/recycle",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "pool",
+            "slots",
+            "{{slot}}",
+            "recycle"
+          ]
+        },
+        "description": "Recycle one pool slot"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/ages-host/restart-iis",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/ages-host/restart-iis",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages-host",
+            "restart-iis"
+          ]
+        },
+        "description": "Restart AGES host IIS"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/iis/restart",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/iis/restart",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "iis",
+            "restart"
+          ]
+        },
+        "description": "Restart IIS alias"
+      }
+    },
+    {
+      "name": "GET /foreign/broker/ages-host/restart-iis",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/ages-host/restart-iis",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages-host",
+            "restart-iis"
+          ]
+        },
+        "description": "Restart AGES host IIS (GET variant)"
+      }
+    },
+    {
+      "name": "GET /foreign/broker/iis/restart",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/iis/restart",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "iis",
+            "restart"
+          ]
+        },
+        "description": "Restart IIS alias (GET variant)"
+      }
+    },
+    {
+      "name": "GET /foreign/broker/ages/:agesFunction",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/ages/{{agesFunction}}",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages",
+            "{{agesFunction}}"
+          ]
+        },
+        "description": "Proxy AGES function by name"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/ages/:agesFunction",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/ages/{{agesFunction}}",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages",
+            "{{agesFunction}}"
+          ]
+        },
+        "description": "Proxy AGES function by name",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"example\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
         }
       }
+    },
+    {
+      "name": "GET /foreign/broker/ages/~mini~/:agesFunction",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/ages/~mini~/{{agesFunction}}",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages",
+            "~mini~",
+            "{{agesFunction}}"
+          ]
+        },
+        "description": "Proxy AGES mini function by name"
+      }
+    },
+    {
+      "name": "POST /foreign/broker/ages/~mini~/:agesFunction",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/ages/~mini~/{{agesFunction}}",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "ages",
+            "~mini~",
+            "{{agesFunction}}"
+          ]
+        },
+        "description": "Proxy AGES mini function by name",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"example\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "GET /ages/health",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/ages/health",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "ages",
+            "health"
+          ]
+        },
+        "description": "Short mount broker health"
+      }
+    },
+    {
+      "name": "GET /ages/:agesFunction",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/ages/{{agesFunction}}",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "ages",
+            "{{agesFunction}}"
+          ]
+        },
+        "description": "Short mount proxy AGES function"
+      }
+    },
+    {
+      "name": "POST /ages/:agesFunction",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/ages/{{agesFunction}}",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "ages",
+            "{{agesFunction}}"
+          ]
+        },
+        "description": "Short mount proxy AGES function",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"example\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "protocolo",
+      "value": "http://",
+      "type": "string"
+    },
+    {
+      "key": "host",
+      "value": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "puerto",
+      "value": ":41048",
+      "type": "string"
+    },
+    {
+      "key": "fullhost",
+      "value": "{{protocolo}}{{host}}{{puerto}}",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "mscode",
+      "value": "CH09-BRK",
+      "type": "string"
+    },
+    {
+      "key": "instance",
+      "value": "local",
+      "type": "string"
+    },
+    {
+      "key": "agesFunction",
+      "value": "default.ages",
+      "type": "string"
+    },
+    {
+      "key": "slot",
+      "value": "0",
+      "type": "string"
     }
   ]
 }

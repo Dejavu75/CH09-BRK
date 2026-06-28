@@ -1,0 +1,605 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "CH09-BRK AGES Broker API",
+    "version": "1.0.0",
+    "description": "Exportado desde habitat/CH09-BRK. Incluye montajes /foreign/broker y /ages; los comodines AGES quedan como requests parametrizadas."
+  },
+  "servers": [
+    {
+      "url": "{fullhost}",
+      "description": "fullhost = protocolo + host + puerto",
+      "variables": {
+        "fullhost": {
+          "default": "http://localhost:41048"
+        },
+        "protocolo": {
+          "default": "http://"
+        },
+        "host": {
+          "default": "localhost"
+        },
+        "puerto": {
+          "default": ":41048"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Root greeting",
+        "operationId": "get_root",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign": {
+      "get": {
+        "summary": "Foreign broker greeting",
+        "operationId": "get_foreign",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/": {
+      "get": {
+        "summary": "Broker greeting",
+        "operationId": "get_foreign_broker",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/health": {
+      "get": {
+        "summary": "Broker health",
+        "operationId": "get_foreign_broker_health",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool": {
+      "get": {
+        "summary": "Pool summary",
+        "operationId": "get_foreign_broker_pool",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool/timings": {
+      "get": {
+        "summary": "Pool timing traces",
+        "operationId": "get_foreign_broker_pool_timings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool/timings/clear": {
+      "post": {
+        "summary": "Clear pool timing traces",
+        "operationId": "post_foreign_broker_pool_timings_clear",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool/timings/show": {
+      "get": {
+        "summary": "Pool timing HTML view",
+        "operationId": "get_foreign_broker_pool_timings_show",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool/show": {
+      "get": {
+        "summary": "Pool HTML view",
+        "operationId": "get_foreign_broker_pool_show",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool/warmup": {
+      "post": {
+        "summary": "Warm up AGES pool",
+        "operationId": "post_foreign_broker_pool_warmup",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/pool/slots/{slot}/recycle": {
+      "post": {
+        "summary": "Recycle one pool slot",
+        "operationId": "post_foreign_broker_pool_slots_slot_recycle",
+        "parameters": [
+          {
+            "name": "slot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/ages-host/restart-iis": {
+      "post": {
+        "summary": "Restart AGES host IIS",
+        "operationId": "post_foreign_broker_ages_host_restart_iis",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "get": {
+        "summary": "Restart AGES host IIS (GET variant)",
+        "operationId": "get_foreign_broker_ages_host_restart_iis",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/iis/restart": {
+      "post": {
+        "summary": "Restart IIS alias",
+        "operationId": "post_foreign_broker_iis_restart",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "get": {
+        "summary": "Restart IIS alias (GET variant)",
+        "operationId": "get_foreign_broker_iis_restart",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/ages/{agesFunction}": {
+      "get": {
+        "summary": "Proxy AGES function by name",
+        "operationId": "get_foreign_broker_ages_agesFunction",
+        "parameters": [
+          {
+            "name": "agesFunction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "post": {
+        "summary": "Proxy AGES function by name",
+        "operationId": "post_foreign_broker_ages_agesFunction",
+        "parameters": [
+          {
+            "name": "agesFunction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "example": {
+                    "type": "boolean",
+                    "example": true
+                  }
+                },
+                "additionalProperties": true
+              },
+              "example": {
+                "example": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/foreign/broker/ages/~mini~/{agesFunction}": {
+      "get": {
+        "summary": "Proxy AGES mini function by name",
+        "operationId": "get_foreign_broker_ages_mini_agesFunction",
+        "parameters": [
+          {
+            "name": "agesFunction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "post": {
+        "summary": "Proxy AGES mini function by name",
+        "operationId": "post_foreign_broker_ages_mini_agesFunction",
+        "parameters": [
+          {
+            "name": "agesFunction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "example": {
+                    "type": "boolean",
+                    "example": true
+                  }
+                },
+                "additionalProperties": true
+              },
+              "example": {
+                "example": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ages/health": {
+      "get": {
+        "summary": "Short mount broker health",
+        "operationId": "get_ages_health",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/ages/{agesFunction}": {
+      "get": {
+        "summary": "Short mount proxy AGES function",
+        "operationId": "get_ages_agesFunction",
+        "parameters": [
+          {
+            "name": "agesFunction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "post": {
+        "summary": "Short mount proxy AGES function",
+        "operationId": "post_ages_agesFunction",
+        "parameters": [
+          {
+            "name": "agesFunction",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "example": {
+                    "type": "boolean",
+                    "example": true
+                  }
+                },
+                "additionalProperties": true
+              },
+              "example": {
+                "example": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
