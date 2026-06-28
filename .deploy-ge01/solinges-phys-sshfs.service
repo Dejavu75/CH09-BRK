@@ -1,0 +1,16 @@
+[Unit]
+Description=Mount Solinges physical server data over SSHFS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=diego.zacur
+Group=diego.zacur
+ExecStartPre=/usr/bin/mkdir -p /mnt/solinges-phys
+ExecStart=/usr/bin/sshfs -o reconnect -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o allow_other diego.zacur@192.168.89.2:/C:/Servidor/Solinges /mnt/solinges-phys
+ExecStop=/usr/bin/fusermount3 -u /mnt/solinges-phys
+
+[Install]
+WantedBy=multi-user.target
