@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Delay Tester</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #172026;
+      background: #f5f7f8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 32px;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .panel {
+      background: #ffffff;
+      border: 1px solid #d9e1e5;
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(27, 42, 50, 0.06);
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(110px, 1fr)) minmax(105px, auto) minmax(110px, auto);
+      gap: 14px;
+      align-items: end;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #33434c;
+    }
+
+    input {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid #bdc9cf;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font: inherit;
+    }
+
+    .check-label {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 8px;
+    }
+
+    .check-label input {
+      width: 18px;
+      min-height: 18px;
+      accent-color: #166a73;
+    }
+
+    button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 14px;
+      background: #166a73;
+      color: #ffffff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+
+    .metric {
+      border: 1px solid #d9e1e5;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+
+    .metric span {
+      display: block;
+      color: #60727c;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 20px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff;
+      border: 1px solid #d9e1e5;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e8eef1;
+      text-align: left;
+      font-size: 14px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #edf3f4;
+      color: #33434c;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .ok {
+      color: #126b3f;
+      font-weight: 700;
+    }
+
+    .error {
+      color: #b42318;
+      font-weight: 700;
+    }
+
+    .response-cell {
+      max-width: 320px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    .mode-label {
+      display: inline-block;
+      min-width: 82px;
+    }
+
+    @media (max-width: 720px) {
+      body {
+        padding: 18px;
+      }
+
+      form,
+      .summary {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Delay Tester</h1>
+
+    <section class="panel">
+      <form id="tester-form">
+        <label>
+          Server
+          <input id="server" type="url" value="http://localhost:80">
+        </label>
+
+        <label>
+          Delay en ms
+          <input id="delay" type="number" min="0" step="100" value="3000">
+        </label>
+
+        <label>
+          Cantidad
+          <input id="count" type="number" min="1" max="100" step="1" value="2">
+        </label>
+
+        <label>
+          Timeout en ms
+          <input id="timeout" type="number" min="1000" step="1000" value="30000">
+        </label>
+
+        <label class="check-label">
+          <input id="parallel" type="checkbox" checked>
+          <span>Asincrónicas</span>
+        </label>
+
+        <button id="run-button" type="submit">Ejecutar</button>
+      </form>
+
+      <div class="summary">
+        <div class="metric">
+          <span>Total tanda</span>
+          <strong id="total-ms">-</strong>
+        </div>
+        <div class="metric">
+          <span>Completadas</span>
+          <strong id="completed">-</strong>
+        </div>
+        <div class="metric">
+          <span>Promedio</span>
+          <strong id="average-ms">-</strong>
+        </div>
+        <div class="metric">
+          <span>Endpoint</span>
+          <strong id="endpoint-delay">-</strong>
+        </div>
+        <div class="metric">
+          <span>Modo</span>
+          <strong id="mode">-</strong>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Estado</th>
+            <th>HTTP</th>
+            <th>Cola</th>
+            <th>Inicio</th>
+            <th>Fin</th>
+            <th>Tiempo</th>
+            <th>Broker</th>
+            <th>Espera</th>
+            <th>AGES</th>
+            <th>Bytes</th>
+            <th>Trace</th>
+            <th>Respuesta</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="results">
+          <tr>
+            <td colspan="14">Sin ejecuciones todavía.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const form = document.querySelector("#tester-form");
+    const runButton = document.querySelector("#run-button");
+    const resultsBody = document.querySelector("#results");
+    const totalMs = document.querySelector("#total-ms");
+    const completed = document.querySelector("#completed");
+    const averageMs = document.querySelector("#average-ms");
+    const endpointDelay = document.querySelector("#endpoint-delay");
+    const mode = document.querySelector("#mode");
+    const serverInput = document.querySelector("#server");
+    const storageKey = "delayTester.server";
+
+    const savedServer = window.localStorage.getItem(storageKey);
+
+    if (savedServer) {
+      serverInput.value = savedServer;
+    }
+
+    function formatMs(value) {
+      return `${value.toFixed(2)} ms`;
+    }
+
+    function normalizeServer(value) {
+      return value.trim().replace(/\/+$/, "");
+    }
+
+    function buildUrl(server, delay, index) {
+      const url = new URL(`${normalizeServer(server)}/ages/~mini~/delay.ages`);
+      url.searchParams.set("delay", String(delay));
+      url.searchParams.set("_request", String(index));
+      url.searchParams.set("_ts", String(Date.now()));
+      return url.toString();
+    }
+
+    function setSummary(total, rows, delay, isParallel) {
+      const successfulRows = rows.filter((row) => row.ok);
+      const average = successfulRows.length
+        ? successfulRows.reduce((sum, row) => sum + row.ms, 0) / successfulRows.length
+        : 0;
+
+      totalMs.textContent = formatMs(total);
+      completed.textContent = `${successfulRows.length}/${rows.length}`;
+      averageMs.textContent = successfulRows.length ? formatMs(average) : "-";
+      endpointDelay.textContent = `${delay} ms`;
+      mode.textContent = isParallel ? "Asincrónica" : "Sincrónica";
+    }
+
+    function renderRows(rows) {
+      resultsBody.innerHTML = "";
+
+      rows.forEach((row) => {
+        resultsBody.appendChild(createResultRow(row));
+      });
+    }
+
+    function createPendingRow(index) {
+      const tr = document.createElement("tr");
+      tr.dataset.index = String(index);
+      tr.innerHTML = `
+        <td>${index}</td>
+        <td>Ejecutando</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td class="response-cell"></td>
+        <td></td>
+      `;
+      return tr;
+    }
+
+    function createResultRow(row) {
+      const tr = document.createElement("tr");
+      const stateClass = row.ok ? "ok" : "error";
+      const stateText = row.ok ? "OK" : "Error";
+      const responseText = row.response
+        ? row.response.slice(0, 500) + (row.response.length > 500 ? "..." : "")
+        : "";
+
+      tr.dataset.index = String(row.index);
+      tr.innerHTML = `
+        <td>${row.index}</td>
+        <td class="${stateClass}">${stateText}</td>
+        <td>${row.status ?? "-"}</td>
+        <td>${row.queueNumber ?? "-"}</td>
+        <td>${formatMs(row.startOffset)}</td>
+        <td>${formatMs(row.endOffset)}</td>
+        <td>${formatMs(row.ms)}</td>
+        <td>${formatHeaderMs(row.brokerTotalMs)}</td>
+        <td>${formatHeaderMs(row.brokerWaitMs)}</td>
+        <td>${formatHeaderMs(row.brokerAgesMs)}</td>
+        <td>${row.bytes ?? "-"}</td>
+        <td>${row.traceId ?? "-"}</td>
+        <td class="response-cell"></td>
+        <td>${row.error ?? ""}</td>
+      `;
+
+      tr.querySelector(".response-cell").textContent = responseText;
+      return tr;
+    }
+
+    function getQueueNumber(response) {
+      const candidates = [
+        "X-CH09-BRK-Pool-Slot",
+        "X-CH09-BRK-Queue",
+        "X-CH09-BRK-Queue-Number",
+        "Queue",
+        "Queue-Number"
+      ];
+
+      for (const header of candidates) {
+        const value = response.headers.get(header);
+
+        if (value) {
+          return value;
+        }
+      }
+
+      return null;
+    }
+
+    function getHeaderNumber(response, header) {
+      const value = response.headers.get(header);
+      const number = value === null ? NaN : Number(value);
+
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function formatHeaderMs(value) {
+      return value === null || value === undefined ? "-" : `${Number(value).toFixed(0)} ms`;
+    }
+
+    function updateResultRow(row) {
+      const currentRow = resultsBody.querySelector(`tr[data-index="${row.index}"]`);
+
+      if (currentRow) {
+        currentRow.replaceWith(createResultRow(row));
+      }
+    }
+
+    async function callEndpoint(index, url, timeoutMs, batchStart) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      const start = performance.now();
+      const startOffset = start - batchStart;
+
+      try {
+        const testId = `delay-${Date.now()}-${index}`;
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            "X-CH09-BRK-Test-Id": testId,
+            "X-CH09-BRK-Test-Start": new Date().toISOString()
+          }
+        });
+        const text = await response.text();
+        const end = performance.now();
+
+        return {
+          index,
+          ok: response.ok,
+          status: response.status,
+          queueNumber: getQueueNumber(response),
+          traceId: response.headers.get("X-CH09-BRK-Trace-Id"),
+          brokerWaitMs: getHeaderNumber(response, "X-CH09-BRK-Wait-Ms"),
+          brokerAgesMs: getHeaderNumber(response, "X-CH09-BRK-AGES-Ms"),
+          brokerTotalMs: getHeaderNumber(response, "X-CH09-BRK-Total-Ms"),
+          bytes: text.length,
+          response: text,
+          startOffset,
+          endOffset: end - batchStart,
+          ms: end - start,
+          error: response.ok ? null : response.statusText
+        };
+      } catch (error) {
+        const end = performance.now();
+
+        return {
+          index,
+          ok: false,
+          status: null,
+          queueNumber: null,
+          bytes: null,
+          response: "",
+          startOffset,
+          endOffset: end - batchStart,
+          ms: end - start,
+          error: error.name === "AbortError" ? `Timeout ${timeoutMs} ms` : error.message
+        };
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const server = serverInput.value;
+      const delay = Number(document.querySelector("#delay").value);
+      const count = Number(document.querySelector("#count").value);
+      const timeoutMs = Number(document.querySelector("#timeout").value);
+      const isParallel = document.querySelector("#parallel").checked;
+
+      window.localStorage.setItem(storageKey, normalizeServer(server));
+
+      runButton.disabled = true;
+      runButton.textContent = "Ejecutando...";
+      resultsBody.innerHTML = "";
+
+      for (let index = 1; index <= count; index++) {
+        resultsBody.appendChild(createPendingRow(index));
+      }
+
+      totalMs.textContent = "-";
+      completed.textContent = "-";
+      averageMs.textContent = "-";
+      endpointDelay.textContent = `${delay} ms`;
+      mode.textContent = isParallel ? "Asincrónica" : "Sincrónica";
+
+      const totalStart = performance.now();
+      let rows;
+
+      if (isParallel) {
+        const calls = [];
+
+        for (let index = 1; index <= count; index++) {
+          const url = buildUrl(server, delay, index);
+          const call = callEndpoint(index, url, timeoutMs, totalStart);
+          calls.push(call);
+          call.then(updateResultRow);
+        }
+
+        rows = await Promise.all(calls);
+      } else {
+        rows = [];
+
+        for (let index = 1; index <= count; index++) {
+          const url = buildUrl(server, delay, index);
+          const row = await callEndpoint(index, url, timeoutMs, totalStart);
+          rows.push(row);
+          updateResultRow(row);
+        }
+      }
+
+      const total = performance.now() - totalStart;
+
+      renderRows(rows);
+      setSummary(total, rows, delay, isParallel);
+
+      runButton.disabled = false;
+      runButton.textContent = "Ejecutar";
+    });
+  </script>
+</body>
+</html>
