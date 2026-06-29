@@ -49,7 +49,7 @@ Revisar primero:
 3. que el pool tenga slots `ready` antes de declarar el broker operativo;
 4. que los artefactos Postman/OpenAPI coincidan con `SSD.md`.
 
-## Ecosystem links
+## Enlaces del ecosistema
 
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
 - Hosts y rutas: `../../ECOSISTEMA_ELEMENTOS_CONFIGURACION.md`

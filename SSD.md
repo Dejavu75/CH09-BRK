@@ -1,5 +1,13 @@
 # CH09-BRK SSD - AGES Broker Source of Truth
 
+## Estado documental
+
+- Status: canonical
+- Owner: Ecosistema Solinges
+- Last verified: 2026-06-28
+- Source of truth: este archivo para comportamiento funcional y operativo de CH09-BRK.
+- Related artifacts: `README.md`, `postman/CH09-BRK.openapi.json`, `postman/CH09-BRK.postman_collection.json`, `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`, `../../ECOSISTEMA_ELEMENTOS_CONFIGURACION.md`, `../../postman/ECOSISTEMA_POSTMAN_PUBLICATION_SPEC.md`.
+
 Estado: baseline generado desde implementación existente  
 Fecha: 2026-06-22  
 Proyecto: `habitat/CH09-BRK`  
@@ -7,6 +15,29 @@ Paquete: `se_broker`
 Responsabilidad: broker stateful para llamadas AGES con pool de sesiones, trazabilidad, recuperación y operación Docker.
 
 > Este documento pasa a ser la fuente de verdad funcional y operativa de CH09-BRK. Si el código, Postman, deploy scripts o documentación externa difieren de este SSD, se debe actualizar el artefacto correspondiente o abrir una decisión explícita.
+
+## Camino rápido
+
+1. Para entender el broker, leer `## 1. Resumen ejecutivo`, `## 3. Alcance funcional` y `## 4. Arquitectura`.
+2. Para revisar contrato publico, ir a `## 5. Contrato de rutas` y `## 6. Contrato proxy`.
+3. Para operar o validar, revisar `## 7. Modelo de pool`, `## 10. Docker y despliegue`, `## 11. Observabilidad` y `## 15. Comandos de verificación`.
+
+## Qué revisar primero
+
+| Necesidad | Seccion |
+| --- | --- |
+| Responsabilidad y limites | `## 1. Resumen ejecutivo`, `## 3. Alcance funcional` |
+| Superficie HTTP | `## 5. Contrato de rutas`, `## 6. Contrato proxy` |
+| Pool y recuperacion | `## 7. Modelo de pool`, `## 8. Restart IIS remoto` |
+| Verificacion operativa | `## 15. Comandos de verificación` |
+| Riesgos y decisiones | `## 13. Riesgos y deudas técnicas`, `## 16. Decisiones pendientes` |
+
+## Aceptación resumida
+
+- El broker mantiene sesiones AGES precalentadas y separa llamadas `mini` y `bigb`.
+- Las rutas publicas e internas quedan diferenciadas en el contrato.
+- La operacion Docker preserva volumenes externos para config, logs, certificados y SSH.
+- Los endpoints administrativos quedan tratados como sensibles y requieren proteccion explicita si se publican.
 
 ## 1. Resumen ejecutivo
 
@@ -512,4 +543,11 @@ Todo cambio futuro debe actualizar este SSD si modifica:
 - pruebas operativas.
 
 La implementación puede cambiar, pero la fuente de verdad tiene que seguir siendo una sola. Si no, mañana nadie sabe si manda el código, el Postman, el compose o la memoria de alguien. Eso es deuda, no arquitectura.
+
+## Ecosystem links
+
+- Global inventory: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
+- Configuration matrix: `../../ECOSISTEMA_ELEMENTOS_CONFIGURACION.md`
+- Postman publication: `../../postman/ECOSISTEMA_POSTMAN_PUBLICATION_SPEC.md`
+- Deployment config: `../../sol_ecosystem/dockerzone/habitat/CH09-BRK`
 
