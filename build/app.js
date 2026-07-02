@@ -78,6 +78,7 @@ const config = (0, se_configbase_1.getServingConfig)();
 const httpServer = http_1.default.createServer(app);
 httpServer.listen(config.port, () => {
     (0, logger_1.log)(`CH09-BRK HTTP Server running on port ${config.port}`);
+    void (0, se_configbase_1.registerService)();
     void ages_pool_1.agesConnectionPool.warmUp().then((summary) => {
         (0, logger_1.log)(`AGES pool warmup finished: ${summary.ready}/${summary.size} ready`);
         ages_pool_1.agesConnectionPool.startPingMonitor();

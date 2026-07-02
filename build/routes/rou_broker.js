@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BrokerRouter = void 0;
 const express_1 = require("express");
+const se_configbase_1 = require("se_configbase");
 const ages_pool_1 = require("../services/ages_pool");
 const logger_1 = require("../utils/logger");
 const build_info_1 = require("../generated/build_info");
@@ -24,6 +25,12 @@ exports.BrokerRouter.get("/health", (_req, res) => {
         service: "CH09-BRK",
         build: build_info_1.BROKER_BUILD_INFO
     });
+});
+exports.BrokerRouter.all("/heartbeat", (_req, res) => {
+    res.json({ message: "AGES Broker is alive." });
+});
+exports.BrokerRouter.all("/heartbeat/beat", (_req, res) => {
+    res.json((0, se_configbase_1.getHeartBeat)());
 });
 exports.BrokerRouter.get("/pool", (_req, res) => {
     res.json(getPublicPoolSummary());

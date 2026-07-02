@@ -110,6 +110,86 @@
         }
       }
     },
+    "/foreign/broker/heartbeat": {
+      "get": {
+        "summary": "Lightweight broker heartbeat",
+        "operationId": "get_foreign_broker_heartbeat",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "post": {
+        "summary": "Lightweight broker heartbeat",
+        "operationId": "post_foreign_broker_heartbeat",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
+    "/foreign/broker/heartbeat/beat": {
+      "get": {
+        "summary": "MS07 broker heartbeat beat",
+        "operationId": "get_foreign_broker_heartbeat_beat",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      },
+      "post": {
+        "summary": "MS07 broker heartbeat beat",
+        "operationId": "post_foreign_broker_heartbeat_beat",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Respuesta exitosa"
+          },
+          "400": {
+            "description": "Solicitud invalida"
+          },
+          "404": {
+            "description": "No encontrado"
+          },
+          "500": {
+            "description": "Error interno"
+          }
+        }
+      }
+    },
     "/foreign/broker/pool": {
       "get": {
         "summary": "Pool summary",

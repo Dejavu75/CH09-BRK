@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "fs";
 import http from "http";
 import https from "https";
 import path from "path";
-import { DoormanController, getFullCors, getServingConfig } from "se_configbase";
+import { DoormanController, getFullCors, getServingConfig, registerService } from "se_configbase";
 
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
@@ -52,6 +52,7 @@ const httpServer = http.createServer(app);
 
 httpServer.listen(config.port, () => {
   log(`CH09-BRK HTTP Server running on port ${config.port}`);
+  void registerService();
   void agesConnectionPool.warmUp().then((summary) => {
     log(`AGES pool warmup finished: ${summary.ready}/${summary.size} ready`);
     agesConnectionPool.startPingMonitor();

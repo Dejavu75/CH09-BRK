@@ -1,4 +1,5 @@
 import { Request, Response, Router } from "express";
+import { getHeartBeat } from "se_configbase";
 
 import { agesConnectionPool } from "../services/ages_pool";
 import { warn } from "../utils/logger";
@@ -16,6 +17,14 @@ BrokerRouter.get("/health", (_req, res) => {
     service: "CH09-BRK",
     build: BROKER_BUILD_INFO
   });
+});
+
+BrokerRouter.all("/heartbeat", (_req, res) => {
+  res.json({ message: "AGES Broker is alive." });
+});
+
+BrokerRouter.all("/heartbeat/beat", (_req, res) => {
+  res.json(getHeartBeat());
 });
 
 BrokerRouter.get("/pool", (_req, res) => {

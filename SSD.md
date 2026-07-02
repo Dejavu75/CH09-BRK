@@ -128,6 +128,8 @@ Esto significa que las rutas operativas pueden existir bajo ambos prefijos si no
 | GET | `/foreign` | Ruta informativa documentada en Postman/OpenAPI. |
 | GET | `/foreign/broker/` | Base pública del broker. |
 | GET | `/foreign/broker/health` | Health check del broker. |
+| ALL | `/foreign/broker/heartbeat` | Latido liviano local del broker. |
+| ALL | `/foreign/broker/heartbeat/beat` | Latido MS07 reconocible mediante `se_configbase.getHeartBeat()`. |
 | GET | `/ages/health` | Health check por montaje `/ages`. |
 
 ### 5.2 Rutas operativas del pool
@@ -313,7 +315,7 @@ Gotcha: el Dockerfile expone `3000 80 443`, pero la aplicación real escucha por
 
 | Grupo | Variables |
 | --- | --- |
-| Core | `PORT`, `PORT_SSL`, `MSCODE`, `MSINSTANCE`, `MSDB`, `MSVERSION`, `MSMONINTERVAL`, `MSURL`, `MSSERVICETYPE` |
+| Core | `PORT`, `PORT_SSL`, `MSCODE`, `MSINSTANCE`, `MSDB`, `MSVERSION`, `MSMONINTERVAL`, `MSURL`, `MSHEARTBEATMONITOR`, `MSSERVICETYPE` |
 | AGES | `HAAGES`, `AGES_API_KEY`, `AGES_SSH_HOST`, `AGES_SSH_USER`, `AGES_SSH_KEY_PATH`, `AGES_SSH_RESTART_COMMAND`, `AGES_IIS_RESTART_COOLDOWN_SECONDS` |
 | Pool | `slots_mini`, `slots_bigb`, `slots_mini_max`, `slots_bigb_max`, `slots_adaptive_hold_minutes` |
 | SSL/certbot | `CERTBOT_DOMAIN`, `CERTBOT_EMAIL`, `SSL_CERT_DOMAIN`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `CERT_PATH_CONTAINER`, `CERTBOT_WEBROOT` |
@@ -386,6 +388,7 @@ Certbot:
 ### 11.1 Health y pool
 
 - `/health` valida disponibilidad básica del broker.
+- `/heartbeat/beat` devuelve el contrato `cnt_heartbeat` de `se_configbase` para que MS07 lo reconozca como latido estándar.
 - `/pool` expone resumen del pool.
 - `/pool/show` expone dashboard HTML.
 - `/pool/timings` expone timing log.
@@ -485,6 +488,7 @@ Una implementación nueva de CH09-BRK cumple este SSD cuando:
 ```bash
 docker ps --filter name=ch09-brk --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 curl -sS -m 8 http://127.0.0.1:41048/foreign/broker/health
+curl -sS -m 8 http://127.0.0.1:41048/foreign/broker/heartbeat/beat
 curl -sS -m 8 http://127.0.0.1:41048/foreign/broker/pool
 curl -sS -m 8 http://127.0.0.1:41048/foreign/broker/pool/timings
 ```
@@ -550,4 +554,3 @@ La implementación puede cambiar, pero la fuente de verdad tiene que seguir sien
 - Configuration matrix: `../../ECOSISTEMA_ELEMENTOS_CONFIGURACION.md`
 - Postman publication: `../../postman/ECOSISTEMA_POSTMAN_PUBLICATION_SPEC.md`
 - Deployment config: `../../sol_ecosystem/dockerzone/habitat/CH09-BRK`
-

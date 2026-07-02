@@ -99,6 +99,57 @@
       }
     },
     {
+      "name": "GET /foreign/broker/heartbeat",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/heartbeat",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "heartbeat"
+          ]
+        },
+        "description": "Lightweight broker heartbeat"
+      }
+    },
+    {
+      "name": "GET /foreign/broker/heartbeat/beat",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{fullhost}}/foreign/broker/heartbeat/beat",
+          "host": [
+            "{{fullhost}}"
+          ],
+          "path": [
+            "foreign",
+            "broker",
+            "heartbeat",
+            "beat"
+          ]
+        },
+        "description": "MS07 broker heartbeat beat"
+      }
+    },
+    {
       "name": "GET /foreign/broker/pool",
       "request": {
         "method": "GET",
