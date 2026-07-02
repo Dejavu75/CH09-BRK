@@ -82,3 +82,37 @@ The deploy script expects these existing dockerzone paths:
    - `/foreign/broker/pool/show`
 
 The pool UI and JSON should show the build metadata and must not expose raw AGES token/cookie values.
+
+## Watchtower auto-update mode
+
+Current client hosts use Watchtower as the low-friction deployment path. A push to `main` publishes
+`dhzacur/ha_ch09_brk:latest`; Watchtower polls Docker Hub and recreates only broker containers that
+explicitly opt in.
+
+Each broker `ch09` service must keep this label:
+
+```yaml
+labels:
+  - "com.centurylinklabs.watchtower.enable=true"
+```
+
+Watchtower should run with label filtering enabled so certbot and unrelated containers are not touched:
+
+```bash
+docker run -d \
+  --name watchtower \
+  --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e DOCKER_API_VERSION=1.44 \
+  containrrr/watchtower \
+  --label-enable --cleanup --interval 300
+```
+
+`DOCKER_API_VERSION=1.44` is intentional. Without it, this environment can make Watchtower detect an
+old Docker client API and restart-loop with `client version 1.25 is too old`.
+
+Watchtower is currently installed on:
+
+- SRI SRI production and testing broker containers.
+- Merclin production and testing broker containers.
+- Induart production broker container through the physical host jump path.
