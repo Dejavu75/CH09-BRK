@@ -9,8 +9,12 @@
     "start": "node build/app.js",
     "delay:cli": "node Tests/delay/delay-cli.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build-push": "docker build -t dhzacur/ha_ch09_brk . && docker push dhzacur/ha_ch09_brk",
-    "build": "docker build -t dhzacur/ha_ch09_brk . "
+    "build-push": "npm run tsc && npm run docker:build && npm run docker:push",
+    "build": "npm run tsc && npm run docker:build",
+    "build-info": "node scripts/generate-build-info.mjs",
+    "pretsc": "npm run build-info",
+    "docker:build": "docker build -t dhzacur/ha_ch09_brk .",
+    "docker:push": "docker push dhzacur/ha_ch09_brk"
   },
   "keywords": [],
   "author": "",

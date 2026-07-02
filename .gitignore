@@ -144,3 +144,5 @@ vite.config.ts.timestamp-*
 
 # Generated deployment context
 .deploy-context/
+# Generated build metadata
+src/generated/build_info.ts

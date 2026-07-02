@@ -13,6 +13,7 @@ exports.BrokerRouter = void 0;
 const express_1 = require("express");
 const ages_pool_1 = require("../services/ages_pool");
 const logger_1 = require("../utils/logger");
+const build_info_1 = require("../generated/build_info");
 exports.BrokerRouter = (0, express_1.Router)();
 exports.BrokerRouter.get("/", (_req, res) => {
     res.send({ message: "Welcome to the broker: where messages learn to behave before crossing the border." });
@@ -20,11 +21,12 @@ exports.BrokerRouter.get("/", (_req, res) => {
 exports.BrokerRouter.get("/health", (_req, res) => {
     res.json({
         status: "ok",
-        service: "CH09-BRK"
+        service: "CH09-BRK",
+        build: build_info_1.BROKER_BUILD_INFO
     });
 });
 exports.BrokerRouter.get("/pool", (_req, res) => {
-    res.json(ages_pool_1.agesConnectionPool.getSummary());
+    res.json(getPublicPoolSummary());
 });
 exports.BrokerRouter.get("/pool/timings", (_req, res) => {
     res.json(ages_pool_1.agesConnectionPool.getTimingLog());
@@ -545,8 +547,12 @@ function formatOffsetMs(base, value) {
     }
     return `+${valueMs - baseMs} ms`;
 }
-function renderPoolPage(req) {
+function getPublicPoolSummary() {
     const pool = ages_pool_1.agesConnectionPool.getSummary();
+    return Object.assign(Object.assign({}, pool), { build: build_info_1.BROKER_BUILD_INFO, slots: pool.slots.map((slot) => (Object.assign(Object.assign({}, slot), { agesToken: slot.agesToken ? "Presente (oculto)" : "", aspNetSessionId: slot.aspNetSessionId ? "Presente (oculta)" : "" }))) });
+}
+function renderPoolPage(req) {
+    const pool = getPublicPoolSummary();
     const json = escapeHtml(JSON.stringify(pool, null, 2));
     const basePath = req.baseUrl || "";
     const poolPath = `${basePath}/pool`;
@@ -654,6 +660,7 @@ function renderPoolPage(req) {
     const json = document.getElementById("json");
     const copyJson = document.getElementById("copyJson");
     const base = document.getElementById("base");
+    const buildInfo = ${JSON.stringify(build_info_1.BROKER_BUILD_INFO)};
     let currentPool = null;
     const dateFormatter = new Intl.DateTimeFormat(undefined, {
       year: "numeric",
@@ -678,6 +685,10 @@ function renderPoolPage(req) {
 
     function statusText() {
       return new Date().toLocaleTimeString("es-AR", { hour12: false });
+    }
+
+    function buildInfoText() {
+      return "Versión " + buildInfo.version + " · Compilado " + localTime(buildInfo.builtAt);
     }
 
     function localTime(value) {
@@ -759,7 +770,7 @@ function renderPoolPage(req) {
       queues.innerHTML = renderQueues(pool);
       slots.innerHTML = pool.slots.map(renderSlot).join("");
       json.textContent = localizeJson(pool);
-      statusLine.textContent = "Actualizado " + statusText();
+      statusLine.textContent = "Actualizado " + statusText() + " · " + buildInfoText();
     }
 
     async function refreshPool() {

@@ -2,6 +2,7 @@ import { Request, Response, Router } from "express";
 
 import { agesConnectionPool } from "../services/ages_pool";
 import { warn } from "../utils/logger";
+import { BROKER_BUILD_INFO } from "../generated/build_info";
 
 export const BrokerRouter = Router();
 
@@ -12,12 +13,13 @@ BrokerRouter.get("/", (_req, res) => {
 BrokerRouter.get("/health", (_req, res) => {
   res.json({
     status: "ok",
-    service: "CH09-BRK"
+    service: "CH09-BRK",
+    build: BROKER_BUILD_INFO
   });
 });
 
 BrokerRouter.get("/pool", (_req, res) => {
-  res.json(agesConnectionPool.getSummary());
+  res.json(getPublicPoolSummary());
 });
 
 BrokerRouter.get("/pool/timings", (_req, res) => {
@@ -600,8 +602,26 @@ function formatOffsetMs(base?: string, value?: string): string {
   return `+${valueMs - baseMs} ms`;
 }
 
-function renderPoolPage(req: Request): string {
+type PublicPoolSummary = ReturnType<typeof agesConnectionPool.getSummary> & {
+  build: typeof BROKER_BUILD_INFO;
+};
+
+function getPublicPoolSummary(): PublicPoolSummary {
   const pool = agesConnectionPool.getSummary();
+
+  return {
+    ...pool,
+    build: BROKER_BUILD_INFO,
+    slots: pool.slots.map((slot) => ({
+      ...slot,
+      agesToken: slot.agesToken ? "Presente (oculto)" : "",
+      aspNetSessionId: slot.aspNetSessionId ? "Presente (oculta)" : ""
+    }))
+  };
+}
+
+function renderPoolPage(req: Request): string {
+  const pool = getPublicPoolSummary();
   const json = escapeHtml(JSON.stringify(pool, null, 2));
   const basePath = req.baseUrl || "";
   const poolPath = `${basePath}/pool`;
@@ -710,6 +730,7 @@ function renderPoolPage(req: Request): string {
     const json = document.getElementById("json");
     const copyJson = document.getElementById("copyJson");
     const base = document.getElementById("base");
+    const buildInfo = ${JSON.stringify(BROKER_BUILD_INFO)};
     let currentPool = null;
     const dateFormatter = new Intl.DateTimeFormat(undefined, {
       year: "numeric",
@@ -734,6 +755,10 @@ function renderPoolPage(req: Request): string {
 
     function statusText() {
       return new Date().toLocaleTimeString("es-AR", { hour12: false });
+    }
+
+    function buildInfoText() {
+      return "Versión " + buildInfo.version + " · Compilado " + localTime(buildInfo.builtAt);
     }
 
     function localTime(value) {
@@ -815,7 +840,7 @@ function renderPoolPage(req: Request): string {
       queues.innerHTML = renderQueues(pool);
       slots.innerHTML = pool.slots.map(renderSlot).join("");
       json.textContent = localizeJson(pool);
-      statusLine.textContent = "Actualizado " + statusText();
+      statusLine.textContent = "Actualizado " + statusText() + " · " + buildInfoText();
     }
 
     async function refreshPool() {
