@@ -1,0 +1,59 @@
+name: Deploy CH09-BRK
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        type: choice
+        options:
+          - srisri
+          - merclin
+          - induart
+          - all
+      image_tag:
+        description: Docker image tag to deploy. Use latest only after a successful release run.
+        required: true
+        default: latest
+      runner:
+        description: JSON runner label list. Use a runner with network access to the target clients.
+        required: true
+        default: '["self-hosted","windows"]'
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.target }}
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.CH09_DEPLOY_SSH_KEY }}" > ~/.ssh/ch09_deploy_key
+          chmod 600 ~/.ssh/ch09_deploy_key
+
+      - name: Deploy target
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SSH_KEY: ~/.ssh/ch09_deploy_key
+          SRISRI_HOST: ${{ secrets.SRISRI_BROKER_HOST }}
+          SRISRI_USER: ${{ secrets.SRISRI_BROKER_USER }}
+          SRISRI_PORT: ${{ secrets.SRISRI_BROKER_PORT }}
+          MERCLIN_HOST: ${{ secrets.MERCLIN_BROKER_HOST }}
+          MERCLIN_USER: ${{ secrets.MERCLIN_BROKER_USER }}
+          MERCLIN_PORT: ${{ secrets.MERCLIN_BROKER_PORT }}
+          INDUART_PHYSICAL_HOST: ${{ secrets.INDUART_PHYSICAL_HOST }}
+          INDUART_PHYSICAL_USER: ${{ secrets.INDUART_PHYSICAL_USER }}
+          INDUART_PHYSICAL_PORT: ${{ secrets.INDUART_PHYSICAL_PORT }}
+          INDUART_GES01_HOST: ${{ secrets.INDUART_GES01_HOST }}
+          INDUART_GES01_USER: ${{ secrets.INDUART_GES01_USER }}
+          INDUART_GES01_PORT: ${{ secrets.INDUART_GES01_PORT }}
+        run: scripts/deploy-ch09-brk.sh "$TARGET" "$IMAGE_TAG"

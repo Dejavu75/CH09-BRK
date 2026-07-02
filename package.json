@@ -14,7 +14,8 @@
     "build-info": "node scripts/generate-build-info.mjs",
     "pretsc": "npm run build-info",
     "docker:build": "docker build -t dhzacur/ha_ch09_brk .",
-    "docker:push": "docker push dhzacur/ha_ch09_brk"
+    "docker:push": "docker push dhzacur/ha_ch09_brk",
+    "ci": "npm ci && npm run tsc"
   },
   "keywords": [],
   "author": "",
