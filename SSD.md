@@ -240,6 +240,7 @@ Estados observados:
 
 - `idle`
 - `warming`
+- `starting`: AGES respondió `Warmingup` al warmup; todavía no entregó credenciales de sesión.
 - `ready`
 - `error`
 
@@ -269,7 +270,7 @@ Riesgo: la espera de slot debe tener timeout operativo definido. Si el código n
 - Warmup manual por botón/API: blanquea todos los slots antes de recalentar.
 - El warmup no debe ser una barrera global: los slots que ya estén `ready` pueden atender requests mientras el resto del pool continúa calentando.
 - Timeout de warmup por intento: 50 segundos.
-- Máximo de intentos por warmup: 2.
+- Máximo de intentos por warmup: 2; una respuesta exacta `Warmingup` se reintenta mientras quede un intento y queda en `starting` solo al agotar ese máximo.
 - Ping monitor: cada 5 minutos.
 - El ping monitor recicla slots no listos o con ping no exitoso.
 - Slots dinámicos se pueden reducir luego del hold time configurado.

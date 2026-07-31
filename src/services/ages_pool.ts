@@ -12,6 +12,7 @@ const AGES_TOKEN_HEADER = "AGES_TOKEN";
 const AGES_API_KEY_HEADER = "X-AGES-API-Key";
 const WARMUP_TIMEOUT_MS = 50_000;
 const WARMUP_MAX_ATTEMPTS = 2;
+const AGES_WARMUP_STARTING_RESPONSE = "Warmingup";
 const PING_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_MINI_SLOTS = 5;
 const DEFAULT_BIGB_SLOTS = 5;
@@ -30,7 +31,7 @@ const AGES_SSH_RESTART_COMMAND =
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
 const execFileAsync = promisify(execFile);
 
-type AgesPoolSlotStatus = "idle" | "warming" | "ready" | "error";
+type AgesPoolSlotStatus = "idle" | "warming" | "starting" | "ready" | "error";
 type AgesPoolSlotKind = "bigb" | "mini";
 type AgesPoolEndpoint = {
   kind: AgesPoolSlotKind;
@@ -217,6 +218,11 @@ export class AgesConnectionPool {
 
     for (const slot of warmupSlots) {
       await this.initializeSlot(slot);
+
+      if (slot.status === "starting") {
+        log(`warmup slot starting | ${this.formatSlot(slot)}`);
+        continue;
+      }
 
       if (slot.status !== "ready") {
         warn(
@@ -519,8 +525,17 @@ export class AgesConnectionPool {
           return slot.status;
         }
 
-        slot.status = "error";
-        slot.lastError = `AGES did not return ${AGES_TOKEN_HEADER} and ${ASP_NET_SESSION_COOKIE}`;
+        if (slot.warmupResponse.trim() === AGES_WARMUP_STARTING_RESPONSE) {
+          if (attempt === WARMUP_MAX_ATTEMPTS) {
+            slot.status = "starting";
+            return slot.status;
+          }
+
+          slot.status = "warming";
+        } else {
+          slot.status = "error";
+          slot.lastError = `AGES did not return ${AGES_TOKEN_HEADER} and ${ASP_NET_SESSION_COOKIE}`;
+        }
       } catch (error) {
         slot.status = "error";
         slot.lastInitializedAt = new Date().toISOString();
