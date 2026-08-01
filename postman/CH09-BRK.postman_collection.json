@@ -146,8 +146,27 @@
             "beat"
           ]
         },
-        "description": "MS07 broker heartbeat beat"
-      }
+        "description": "MS07 broker heartbeat. Keeps numeric version and serviceType=ms; extraData is JSON-encoded and includes component, associated system/instance, and BROKER_BUILD_INFO fields."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Heartbeat broker metadata contract\", function () {",
+              "  const heartbeat = pm.response.json();",
+              "  const extraData = JSON.parse(heartbeat.extraData);",
+              "  pm.expect(heartbeat.version).to.be.a(\"number\");",
+              "  pm.expect(heartbeat.serviceType).to.eql(\"ms\");",
+              "  pm.expect(extraData.component).to.eql(\"ch09-broker\");",
+            "  pm.expect(extraData).to.include.all.keys(\"component\", \"associatedSystem\", \"associatedInstance\", \"build\");",
+              "  pm.expect(extraData.build).to.include.all.keys(\"version\", \"builtAt\", \"buildNumber\", \"gitSha\", \"gitDirty\");",
+              "});"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "GET /foreign/broker/pool",

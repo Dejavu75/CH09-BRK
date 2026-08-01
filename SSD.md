@@ -129,7 +129,7 @@ Esto significa que las rutas operativas pueden existir bajo ambos prefijos si no
 | GET | `/foreign/broker/` | Base pública del broker. |
 | GET | `/foreign/broker/health` | Health check del broker. |
 | ALL | `/foreign/broker/heartbeat` | Latido liviano local del broker. |
-| ALL | `/foreign/broker/heartbeat/beat` | Latido MS07 reconocible mediante `se_configbase.getHeartBeat()`. |
+| ALL | `/foreign/broker/heartbeat/beat` | Latido MS07 reconocible mediante `se_configbase.getHeartBeat()`, con metadatos aditivos del broker en `extraData`. |
 | GET | `/ages/health` | Health check por montaje `/ages`. |
 
 ### 5.2 Rutas operativas del pool
@@ -316,7 +316,7 @@ Gotcha: el Dockerfile expone `3000 80 443`, pero la aplicación real escucha por
 
 | Grupo | Variables |
 | --- | --- |
-| Core | `PORT`, `PORT_SSL`, `MSCODE`, `MSINSTANCE`, `MSDB`, `MSVERSION`, `MSMONINTERVAL`, `MSURL`, `MSHEARTBEATMONITOR`, `MSSERVICETYPE` |
+| Core | `PORT`, `PORT_SSL`, `MSCODE`, `MSINSTANCE`, `MSDB`, `MSVERSION`, `MSMONINTERVAL`, `MSURL`, `MSHEARTBEATMONITOR`, `MSSERVICETYPE`, `MSASSOCIATEDSYSTEM`, `MSASSOCIATEDINSTANCE`, `MSEXTRADATA` |
 | AGES | `HAAGES`, `AGES_API_KEY`, `AGES_SSH_HOST`, `AGES_SSH_USER`, `AGES_SSH_KEY_PATH`, `AGES_SSH_RESTART_COMMAND`, `AGES_IIS_RESTART_COOLDOWN_SECONDS` |
 | Pool | `slots_mini`, `slots_bigb`, `slots_mini_max`, `slots_bigb_max`, `slots_adaptive_hold_minutes` |
 | SSL/certbot | `CERTBOT_DOMAIN`, `CERTBOT_EMAIL`, `SSL_CERT_DOMAIN`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `CERT_PATH_CONTAINER`, `CERTBOT_WEBROOT` |
@@ -389,7 +389,10 @@ Certbot:
 ### 11.1 Health y pool
 
 - `/health` valida disponibilidad básica del broker.
-- `/heartbeat/beat` devuelve el contrato `cnt_heartbeat` de `se_configbase` para que MS07 lo reconozca como latido estándar.
+- `/heartbeat/beat` devuelve el contrato `cnt_heartbeat` de `se_configbase` para que MS07 lo reconozca como latido estándar. Conserva `version` numérica y `serviceType=ms`.
+- `extraData` es un string JSON. Conserva claves propias de un `MSEXTRADATA` válido, pero el código controla y prevalece sobre `component`, `associatedSystem`, `associatedInstance` y `build`.
+- `component` vale `ch09-broker`; `associatedSystem` proviene de `MSASSOCIATEDSYSTEM`; `associatedInstance` usa `MSASSOCIATEDINSTANCE` y cae a `MSINSTANCE` si falta o está vacío.
+- `build` expone `version`, `builtAt`, `buildNumber`, `gitSha` y `gitDirty` desde `BROKER_BUILD_INFO`. Un `MSEXTRADATA` malformado se ignora sin abortar el arranque ni el latido.
 - `/pool` expone resumen del pool.
 - `/pool/show` expone dashboard HTML.
 - `/pool/timings` expone timing log.

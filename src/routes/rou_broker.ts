@@ -2,6 +2,7 @@ import { Request, Response, Router } from "express";
 import { getHeartBeat } from "se_configbase";
 
 import { agesConnectionPool } from "../services/ages_pool";
+import { configureHeartbeatExtraData } from "../services/heartbeat_metadata";
 import { warn } from "../utils/logger";
 import { BROKER_BUILD_INFO } from "../generated/build_info";
 
@@ -24,6 +25,7 @@ BrokerRouter.all("/heartbeat", (_req, res) => {
 });
 
 BrokerRouter.all("/heartbeat/beat", (_req, res) => {
+  configureHeartbeatExtraData();
   res.json(getHeartBeat());
 });
 

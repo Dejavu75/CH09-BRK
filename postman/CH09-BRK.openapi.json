@@ -157,7 +157,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Respuesta exitosa"
+            "description": "Legacy cnt_heartbeat with JSON-encoded broker metadata in extraData",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerHeartbeat"
+                }
+              }
+            }
           },
           "400": {
             "description": "Solicitud invalida"
@@ -176,7 +183,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Respuesta exitosa"
+            "description": "Legacy cnt_heartbeat with JSON-encoded broker metadata in extraData",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerHeartbeat"
+                }
+              }
+            }
           },
           "400": {
             "description": "Solicitud invalida"
@@ -676,6 +690,117 @@
               "example": {
                 "example": true
               }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BrokerHeartbeatExtraData": {
+        "type": "object",
+        "required": [
+          "component",
+          "associatedSystem",
+          "associatedInstance",
+          "build"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "enum": [
+              "ch09-broker"
+            ]
+          },
+          "associatedSystem": {
+            "type": "string"
+          },
+          "associatedInstance": {
+            "type": "string"
+          },
+          "build": {
+            "type": "object",
+            "required": [
+              "version",
+              "builtAt",
+              "buildNumber",
+              "gitSha",
+              "gitDirty"
+            ],
+            "properties": {
+              "version": {
+                "type": "string"
+              },
+              "builtAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "buildNumber": {
+                "type": "string"
+              },
+              "gitSha": {
+                "type": "string"
+              },
+              "gitDirty": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "BrokerHeartbeat": {
+        "type": "object",
+        "required": [
+          "mscode",
+          "instance",
+          "status",
+          "version",
+          "url",
+          "expectedInterval",
+          "action",
+          "serviceType",
+          "extraData"
+        ],
+        "properties": {
+          "mscode": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "description": "Legacy numeric service version."
+          },
+          "url": {
+            "type": "string"
+          },
+          "expectedInterval": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "beat"
+            ]
+          },
+          "serviceType": {
+            "type": "string",
+            "enum": [
+              "ms"
+            ]
+          },
+          "extraData": {
+            "type": "string",
+            "description": "JSON-encoded BrokerHeartbeatExtraData. Valid existing MSEXTRADATA keys are retained; code-owned keys win.",
+            "example": "{\"component\":\"ch09-broker\",\"associatedSystem\":\"SYS01\",\"associatedInstance\":\"AGES01\",\"build\":{\"version\":\"1.0.0+20260731T190000Z.3ca7737ed26d\",\"builtAt\":\"2026-07-31T19:00:00.000Z\",\"buildNumber\":\"20260731T190000Z\",\"gitSha\":\"3ca7737ed26d\",\"gitDirty\":false}}",
+            "x-json-schema": {
+              "$ref": "#/components/schemas/BrokerHeartbeatExtraData"
             }
           }
         }

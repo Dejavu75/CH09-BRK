@@ -7,7 +7,10 @@ import { DoormanController, getFullCors, getServingConfig, registerService } fro
 
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
+import { configureHeartbeatExtraData } from "./services/heartbeat_metadata";
 import { error, isConfigEnabled, log } from "./utils/logger";
+
+configureHeartbeatExtraData();
 
 const doorMan = DoormanController.getInstance();
 const app = express();

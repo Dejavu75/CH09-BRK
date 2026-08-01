@@ -13,6 +13,7 @@ exports.BrokerRouter = void 0;
 const express_1 = require("express");
 const se_configbase_1 = require("se_configbase");
 const ages_pool_1 = require("../services/ages_pool");
+const heartbeat_metadata_1 = require("../services/heartbeat_metadata");
 const logger_1 = require("../utils/logger");
 const build_info_1 = require("../generated/build_info");
 exports.BrokerRouter = (0, express_1.Router)();
@@ -30,6 +31,7 @@ exports.BrokerRouter.all("/heartbeat", (_req, res) => {
     res.json({ message: "AGES Broker is alive." });
 });
 exports.BrokerRouter.all("/heartbeat/beat", (_req, res) => {
+    (0, heartbeat_metadata_1.configureHeartbeatExtraData)();
     res.json((0, se_configbase_1.getHeartBeat)());
 });
 exports.BrokerRouter.get("/pool", (_req, res) => {
