@@ -13,6 +13,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.agesConnectionPool = exports.AgesConnectionPool = void 0;
 exports.resolveBackendConfiguration = resolveBackendConfiguration;
 exports.chooseLeastLoadedBackend = chooseLeastLoadedBackend;
+exports.resolveIisAppPoolName = resolveIisAppPoolName;
 require("dotenv/config");
 const child_process_1 = require("child_process");
 const fs_1 = require("fs");
@@ -40,12 +41,15 @@ const AGES_SSH_USER = (_c = process.env.AGES_SSH_USER) !== null && _c !== void 0
 const AGES_SSH_KEY_PATH = (_d = process.env.AGES_SSH_KEY_PATH) !== null && _d !== void 0 ? _d : "/app/keys/ch09_brk_iis";
 const AGES_SSH_RESTART_COMMAND = (_e = process.env.AGES_SSH_RESTART_COMMAND) !== null && _e !== void 0 ? _e : "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
+const AGES_SSH_COMMAND_TIMEOUT_MS = getEnvDurationSeconds("AGES_SSH_COMMAND_TIMEOUT_SECONDS", 30) * 1000;
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 const initialEndpoints = createInitialEndpoints();
 class AgesConnectionPool {
-    constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints, backendConfiguration = resolveBackendConfiguration(process.env, baseUrl)) {
+    constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints, backendConfiguration = resolveBackendConfiguration(process.env, baseUrl), options = {}) {
+        var _a, _b, _c;
         this.baseUrl = baseUrl;
         this.slots = [];
+        this.backendStates = new Map();
         this.nextSlotId = 1;
         this.nextSlotIndex = 0;
         this.pingSweepRunning = false;
@@ -60,10 +64,16 @@ class AgesConnectionPool {
         };
         this.growPromises = {};
         this.backendConfiguration = backendConfiguration;
+        backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
+        this.drainTimeoutMs = (_a = options.drainTimeoutMs) !== null && _a !== void 0 ? _a : getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
+        this.pollMs = (_b = options.pollMs) !== null && _b !== void 0 ? _b : 250;
+        this.recycleExecutor = (_c = options.recycleExecutor) !== null && _c !== void 0 ? _c : ((id) => this.recycleBackendAppPool(id));
         endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
     }
     warmUp() {
         return __awaiter(this, arguments, void 0, function* (reason = "warmup requested") {
+            if (this.lifecycle)
+                throw new Error(`Cannot warm up while backend ${this.lifecycle.id} is recycling`);
             if (this.warmupPromise) {
                 return this.warmupPromise;
             }
@@ -78,6 +88,15 @@ class AgesConnectionPool {
             var _a, _b;
             this.initialWarmupFinished = false;
             const warmupSlots = [...this.slots];
+            this.backendStates.forEach((backend) => { backend.state = "draining"; });
+            try {
+                yield this.waitForDrain(warmupSlots, "global warmup");
+            }
+            catch (error) {
+                this.backendStates.forEach((backend) => { backend.state = "degraded"; backend.lastError = formatError(error); });
+                throw error;
+            }
+            this.backendStates.forEach((backend) => { backend.state = "warming"; });
             if (options.resetBeforeStart) {
                 yield this.resetPoolForWarmup((_a = options.resetReason) !== null && _a !== void 0 ? _a : "warmup requested");
             }
@@ -105,9 +124,15 @@ class AgesConnectionPool {
                     ].join(" | "));
                     continue;
                 }
-                this.notifySlotWaiters(slot.kind);
             }
             this.initialWarmupFinished = warmupSlots.every((slot) => slot.status === "ready");
+            this.backendStates.forEach((backend, id) => {
+                const failed = warmupSlots.find((slot) => slot.backendId === id && slot.status !== "ready");
+                backend.state = failed ? "degraded" : "active";
+                backend.lastError = failed === null || failed === void 0 ? void 0 : failed.lastError;
+            });
+            this.notifySlotWaiters("mini");
+            this.notifySlotWaiters("bigb");
             return this.getSummary();
         });
     }
@@ -134,7 +159,7 @@ class AgesConnectionPool {
         return {
             baseUrl: this.baseUrl,
             mode: this.backendConfiguration.mode,
-            backends: this.backendConfiguration.backends.map((backend) => (Object.assign(Object.assign({}, backend), { slots: this.slots.filter((slot) => slot.backendId === backend.id).length }))),
+            backends: this.backendConfiguration.backends.map((backend) => (Object.assign(Object.assign(Object.assign({}, backend), { slots: this.slots.filter((slot) => slot.backendId === backend.id).length, ready: this.slots.filter((slot) => slot.backendId === backend.id && slot.status === "ready").length }), this.backendStates.get(backend.id)))),
             size: this.slots.length,
             ready: this.slots.filter((slot) => slot.status === "ready").length,
             warming: this.slots.filter((slot) => slot.status === "warming").length,
@@ -170,6 +195,8 @@ class AgesConnectionPool {
     request(slotId_1, endpoint_1) {
         return __awaiter(this, arguments, void 0, function* (slotId, endpoint, init = {}) {
             const slot = this.getSlot(slotId);
+            if (!this.isBackendActive(slot))
+                throw new Error(`Backend ${slot.backendId} is not active`);
             const response = yield fetch(this.resolveSlotEndpoint(slot, endpoint), Object.assign(Object.assign({}, init), { headers: this.buildSessionHeaders(slot, init.headers) }));
             this.captureSessionState(slot, response);
             return response;
@@ -189,6 +216,8 @@ class AgesConnectionPool {
     recycleSlotByReference(slotReference) {
         return __awaiter(this, void 0, void 0, function* () {
             const slot = this.getSlotByReference(slotReference);
+            if (!this.isBackendActive(slot))
+                throw new Error(`Backend ${slot.backendId} is not active`);
             slot.lastError = "manual recycle requested";
             yield this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "manual")));
             return this.getSummary();
@@ -196,6 +225,9 @@ class AgesConnectionPool {
     }
     restartAgesHostManually() {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.backendConfiguration.mode === "dual") {
+                return { status: "error", host: AGES_SSH_HOST, reason: "global_iis_restart_disabled_in_dual_mode" };
+            }
             const reason = "manual_iis_restart";
             const restarted = yield this.restartAgesHost(reason);
             return {
@@ -203,6 +235,35 @@ class AgesConnectionPool {
                 host: AGES_SSH_HOST,
                 reason
             };
+        });
+    }
+    drainAndRecycleBackend(reference) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            if (this.backendConfiguration.mode !== "dual")
+                throw new Error("Directed recycle requires dual mode");
+            const id = reference.trim().toUpperCase();
+            const backend = this.backendStates.get(id);
+            if (!backend || id === "legacy")
+                throw new Error(`Unknown AGES backend ${reference}`);
+            if (this.warmupPromise)
+                throw new Error("Global warmup is running");
+            if (this.lifecycle) {
+                if (this.lifecycle.id === id)
+                    return this.lifecycle.promise;
+                throw new Error(`Backend ${this.lifecycle.id} is already recycling`);
+            }
+            const peer = this.backendConfiguration.backends.find((item) => item.id !== id);
+            const peerSlots = this.slots.filter((slot) => slot.backendId === peer.id);
+            const requiredKinds = new Set(this.slots.map((slot) => slot.kind));
+            if (((_a = this.backendStates.get(peer.id)) === null || _a === void 0 ? void 0 : _a.state) !== "active" ||
+                peerSlots.some((slot) => slot.status !== "ready") ||
+                [...requiredKinds].some((kind) => !peerSlots.some((slot) => slot.kind === kind && slot.status === "ready"))) {
+                throw new Error(`Peer backend ${peer.id} is not active and ready`);
+            }
+            const promise = this.runDirectedRecycle(id, backend).finally(() => { this.lifecycle = undefined; });
+            this.lifecycle = { id, promise };
+            return promise;
         });
     }
     proxyCall(kind_1, functionName_1) {
@@ -277,7 +338,12 @@ class AgesConnectionPool {
                         });
                     }
                     if (response.status === 503) {
-                        yield this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
+                        if (this.backendConfiguration.mode === "dual") {
+                            void this.drainAndRecycleBackend(slot.backendId).catch((error) => (0, logger_1.warn)(`backend recycle fail | ${formatError(error)}`));
+                        }
+                        else {
+                            yield this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
+                        }
                     }
                     const avfpInvalidObjectReason = this.getAvfpInvalidObjectReason(body);
                     if (avfpInvalidObjectReason) {
@@ -304,7 +370,7 @@ class AgesConnectionPool {
                         throw new Error(`${avfpInvalidObjectReason}; no alternate ${kind} slot available`);
                     }
                     const recycleReason = this.getRecycleReason(response.status, body);
-                    if (recycleReason) {
+                    if (recycleReason && !(this.backendConfiguration.mode === "dual" && response.status === 503)) {
                         slot.lastError = recycleReason;
                         yield this.recycleSlot(slot, agesUrl);
                     }
@@ -339,6 +405,17 @@ class AgesConnectionPool {
         return trace;
     }
     initializeSlot(slot) {
+        return __awaiter(this, void 0, void 0, function* () {
+            slot.maintenanceInFlight++;
+            try {
+                return yield this.initializeSlotTracked(slot);
+            }
+            finally {
+                slot.maintenanceInFlight--;
+            }
+        });
+    }
+    initializeSlotTracked(slot) {
         return __awaiter(this, void 0, void 0, function* () {
             this.clearSlotForWarmup(slot);
             slot.status = "warming";
@@ -399,7 +476,18 @@ class AgesConnectionPool {
     }
     pingSlot(slot) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (slot.inUse) {
+            slot.maintenanceInFlight++;
+            try {
+                yield this.pingSlotTracked(slot);
+            }
+            finally {
+                slot.maintenanceInFlight--;
+            }
+        });
+    }
+    pingSlotTracked(slot) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (slot.inUse || !this.isBackendActive(slot)) {
                 return;
             }
             if (slot.status !== "ready") {
@@ -648,7 +736,7 @@ class AgesConnectionPool {
         return this.getSlot(Number.parseInt(idMatch[1], 10));
     }
     getNextReadySlot(kind) {
-        const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && !slot.inUse);
+        const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse);
         if (readySlots.length === 0) {
             throw new Error(`AGES ${kind} pool has no ready slots`);
         }
@@ -658,11 +746,12 @@ class AgesConnectionPool {
     }
     hasReadySlot(kind) {
         const slots = this.slots.filter((slot) => slot.kind === kind);
-        return slots.some((slot) => slot.status === "ready");
+        return slots.some((slot) => slot.status === "ready" && this.isBackendActive(slot));
     }
     hasAvailableAlternateSlot(kind, excludeSlotIds, baseOnly) {
         return this.slots.some((slot) => slot.kind === kind &&
             slot.status === "ready" &&
+            this.isBackendActive(slot) &&
             !slot.inUse &&
             !excludeSlotIds.has(slot.id) &&
             (!baseOnly || !slot.dynamic));
@@ -689,7 +778,7 @@ class AgesConnectionPool {
         });
     }
     getNextAvailableSlot(kind, baseOnly, excludeSlotIds = new Set()) {
-        const baseReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id));
+        const baseReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id));
         if (baseReadySlots.length > 0) {
             const slot = baseReadySlots[this.nextSlotIndex % baseReadySlots.length];
             this.nextSlotIndex = (this.nextSlotIndex + 1) % baseReadySlots.length;
@@ -698,7 +787,7 @@ class AgesConnectionPool {
         if (baseOnly) {
             return undefined;
         }
-        const adaptiveReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id));
+        const adaptiveReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id));
         if (adaptiveReadySlots.length === 0) {
             return undefined;
         }
@@ -733,6 +822,10 @@ class AgesConnectionPool {
             const status = yield this.initializeSlot(slot);
             if (status !== "ready") {
                 (0, logger_1.warn)(`pool grow fail | ${this.formatSlot(slot)} | st=${status} | err=${(_a = slot.lastError) !== null && _a !== void 0 ? _a : "unknown"}`);
+                this.removeSlot(slot);
+                return undefined;
+            }
+            if (!this.isBackendActive(slot)) {
                 this.removeSlot(slot);
                 return undefined;
             }
@@ -807,7 +900,7 @@ class AgesConnectionPool {
     }
     createSlot(kind, dynamic) {
         const endpoint = kind === "mini" ? "/~mini~/dummy_val.ages" : "dummy_val.ages";
-        const backend = chooseLeastLoadedBackend(this.backendConfiguration.backends, this.slots.map((slot) => slot.backendId));
+        const backend = chooseLeastLoadedBackend(this.backendConfiguration.backends.filter((item) => { var _a; return !dynamic || ((_a = this.backendStates.get(item.id)) === null || _a === void 0 ? void 0 : _a.state) === "active"; }), this.slots.map((slot) => slot.backendId));
         return {
             id: this.nextSlotId++,
             backendId: backend.id,
@@ -819,6 +912,7 @@ class AgesConnectionPool {
             aspNetSessionId: "",
             status: "idle",
             inUse: false,
+            maintenanceInFlight: 0,
             dynamic,
             holdUntil: dynamic ? Date.now() + ADAPTIVE_SLOT_HOLD_MS : undefined
         };
@@ -965,6 +1059,10 @@ class AgesConnectionPool {
         const backend = this.backendConfiguration.backends.find((item) => item.id === slot.backendId);
         return resolveBackendEndpoint((_a = backend === null || backend === void 0 ? void 0 : backend.baseUrl) !== null && _a !== void 0 ? _a : this.baseUrl, endpoint);
     }
+    isBackendActive(slot) {
+        var _a;
+        return ((_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state) === "active";
+    }
     formatSlotId(slotId) {
         return slotId.toString().padStart(2, "0");
     }
@@ -1043,6 +1141,60 @@ class AgesConnectionPool {
         catch (_a) {
             return /"error"\s*:\s*"dll_init_error"/i.test(body.toString("utf8"));
         }
+    }
+    runDirectedRecycle(id, backend) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            const slots = this.slots.filter((slot) => slot.backendId === id);
+            backend.state = "draining";
+            try {
+                yield this.waitForDrain(slots, `backend ${id}`);
+                backend.state = "recycling";
+                yield this.recycleExecutor(id);
+                backend.state = "warming";
+                this.prepareSlotsForWarmup(slots);
+                const deadline = Date.now() + this.drainTimeoutMs;
+                while (slots.some((slot) => slot.status !== "ready") && Date.now() < deadline) {
+                    for (const slot of slots.filter((item) => item.status !== "ready"))
+                        yield this.initializeSlot(slot);
+                    if (slots.some((slot) => slot.status !== "ready"))
+                        yield delay(this.pollMs);
+                }
+                const failed = slots.find((slot) => slot.status !== "ready");
+                if (failed)
+                    throw new Error((_a = failed.lastError) !== null && _a !== void 0 ? _a : `backend ${id} warmup timeout`);
+                backend.state = "active";
+                backend.lastError = undefined;
+                this.notifySlotWaiters("mini");
+                this.notifySlotWaiters("bigb");
+                return this.getSummary();
+            }
+            catch (error) {
+                backend.state = "degraded";
+                backend.lastError = formatError(error);
+                throw error;
+            }
+        });
+    }
+    waitForDrain(slots, label) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const deadline = Date.now() + this.drainTimeoutMs;
+            while (slots.some((slot) => slot.inUse || slot.maintenanceInFlight > 0)) {
+                if (Date.now() >= deadline)
+                    throw new Error(`${label} drain timeout`);
+                yield delay(this.pollMs);
+            }
+        });
+    }
+    recycleBackendAppPool(id) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (!AGES_SSH_HOST || !AGES_SSH_USER)
+                throw new Error("AGES SSH target is not configured");
+            const pool = resolveIisAppPoolName(id, process.env);
+            const command = `powershell -NoProfile -NonInteractive -Command "Import-Module WebAdministration; Restart-WebAppPool -Name '${pool}'"`;
+            yield execFileAsync("ssh", ["-i", AGES_SSH_KEY_PATH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                "-o", "StrictHostKeyChecking=accept-new", `${AGES_SSH_USER}@${AGES_SSH_HOST}`, command], { timeout: AGES_SSH_COMMAND_TIMEOUT_MS });
+        });
     }
     restartAgesHost(reason) {
         return __awaiter(this, void 0, void 0, function* () {
@@ -1264,11 +1416,23 @@ function resolveBackendConfiguration(env, legacyBaseUrl = AGES_BASE_URL) {
     return { mode: "dual", backends: [{ id: "A", baseUrl: backendA }, { id: "B", baseUrl: backendB }] };
 }
 function chooseLeastLoadedBackend(backends, assigned) {
+    if (backends.length === 0)
+        throw new Error("No active AGES backend is available for adaptive growth");
     return backends.reduce((best, candidate) => assigned.filter((id) => id === candidate.id).length < assigned.filter((id) => id === best.id).length
         ? candidate
         : best);
 }
+function resolveIisAppPoolName(id, env) {
+    var _a, _b;
+    const value = (_b = (_a = (id === "A" ? env.AGES_IIS_APP_POOL_A : env.AGES_IIS_APP_POOL_B)) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "";
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(value))
+        throw new Error(`Invalid IIS AppPool name for backend ${id}`);
+    return value;
+}
 function resolveBackendEndpoint(baseUrl, endpoint) {
     return `${baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+}
+function delay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 exports.agesConnectionPool = new AgesConnectionPool();

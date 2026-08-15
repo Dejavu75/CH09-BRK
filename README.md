@@ -56,6 +56,16 @@ independientes, configurar juntas `HAAGES_A` y `HAAGES_B`; una configuración pa
 una URL que no sea HTTP(S) impide el arranque. Cada slot mantiene permanentemente su
 backend, token y cookie de sesión. `GET /pool` muestra el modo y la afinidad resultante.
 
+En modo dual, cada backend informa su estado (`active`, `draining`, `recycling`,
+`warming` o `degraded`). `POST /pool/backends/A/drain-recycle` (o `B`) requiere
+`X-Broker-Admin-Api-Key`, drena esa mitad y reinicia únicamente el AppPool indicado
+por `AGES_IIS_APP_POOL_A/B`. El nombre acepta sólo letras, números, `_`, `-` y `.`;
+no se aceptan comandos configurables. Ajustar el drenaje y SSH con
+`AGES_BACKEND_DRAIN_TIMEOUT_SECONDS` y `AGES_SSH_COMMAND_TIMEOUT_SECONDS`.
+
+El reciclado automático dual se limita a respuestas HTTP 503 correlacionadas con un
+slot. Detectar automáticamente el HTTP 500 del error COM queda como seguimiento.
+
 ## Enlaces del ecosistema
 
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
