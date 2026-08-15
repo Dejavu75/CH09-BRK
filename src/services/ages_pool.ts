@@ -33,6 +33,11 @@ const execFileAsync = promisify(execFile);
 
 type AgesPoolSlotStatus = "idle" | "warming" | "starting" | "ready" | "error";
 type AgesPoolSlotKind = "bigb" | "mini";
+export type AgesBackendId = "legacy" | "A" | "B";
+export type AgesBackendConfiguration = {
+  mode: "legacy" | "dual";
+  backends: Array<{ id: AgesBackendId; baseUrl: string }>;
+};
 type AgesPoolEndpoint = {
   kind: AgesPoolSlotKind;
   endpoint: string;
@@ -85,6 +90,7 @@ export type AgesTimingTrace = {
 
 type AgesPoolSlot = {
   id: number;
+  backendId: AgesBackendId;
   kind: AgesPoolSlotKind;
   endpoint: string;
   url: string;
@@ -106,6 +112,8 @@ type AgesPoolSlot = {
 
 export type AgesPoolSummary = {
   baseUrl: string;
+  mode: "legacy" | "dual";
+  backends: Array<{ id: AgesBackendId; baseUrl: string; slots: number }>;
   size: number;
   ready: number;
   warming: number;
@@ -124,6 +132,7 @@ export type AgesPoolSummary = {
   };
   slots: Array<{
     id: number;
+    backendId: AgesBackendId;
     kind: AgesPoolSlotKind;
     status: AgesPoolSlotStatus;
     lastStatusCode?: number;
@@ -145,6 +154,7 @@ export type AgesPoolSummary = {
 export type AgesProxyResult = {
   slotId: number;
   slotKind: AgesPoolSlotKind;
+  backendId: AgesBackendId;
   agesUrl: string;
   status: number;
   headers: Record<string, string | string[]>;
@@ -156,7 +166,8 @@ export type AgesProxyResult = {
 const initialEndpoints = createInitialEndpoints();
 
 export class AgesConnectionPool {
-  private readonly slots: AgesPoolSlot[];
+  private readonly slots: AgesPoolSlot[] = [];
+  private readonly backendConfiguration: AgesBackendConfiguration;
   private nextSlotId = 1;
   private nextSlotIndex = 0;
   private warmupPromise?: Promise<AgesPoolSummary>;
@@ -178,9 +189,11 @@ export class AgesConnectionPool {
 
   constructor(
     private readonly baseUrl: string = AGES_BASE_URL,
-    endpoints: AgesPoolEndpoint[] = initialEndpoints
+    endpoints: AgesPoolEndpoint[] = initialEndpoints,
+    backendConfiguration: AgesBackendConfiguration = resolveBackendConfiguration(process.env, baseUrl)
   ) {
-    this.slots = endpoints.map((item) => this.createSlot(item.kind, false));
+    this.backendConfiguration = backendConfiguration;
+    endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
   }
 
   async warmUp(reason = "warmup requested"): Promise<AgesPoolSummary> {
@@ -245,6 +258,7 @@ export class AgesConnectionPool {
   getSummary(): AgesPoolSummary {
     const slots = this.slots.map((slot) => ({
       id: slot.id,
+      backendId: slot.backendId,
       kind: slot.kind,
       status: slot.status,
       lastStatusCode: slot.lastStatusCode,
@@ -264,6 +278,11 @@ export class AgesConnectionPool {
 
     return {
       baseUrl: this.baseUrl,
+      mode: this.backendConfiguration.mode,
+      backends: this.backendConfiguration.backends.map((backend) => ({
+        ...backend,
+        slots: this.slots.filter((slot) => slot.backendId === backend.id).length
+      })),
       size: this.slots.length,
       ready: this.slots.filter((slot) => slot.status === "ready").length,
       warming: this.slots.filter((slot) => slot.status === "warming").length,
@@ -302,7 +321,7 @@ export class AgesConnectionPool {
 
   async request(slotId: number, endpoint: string, init: RequestInit = {}): Promise<Response> {
     const slot = this.getSlot(slotId);
-    const response = await fetch(this.resolveEndpoint(endpoint), {
+    const response = await fetch(this.resolveSlotEndpoint(slot, endpoint), {
       ...init,
       headers: this.buildSessionHeaders(slot, init.headers)
     });
@@ -326,7 +345,7 @@ export class AgesConnectionPool {
   async recycleSlotByReference(slotReference: string): Promise<AgesPoolSummary> {
     const slot = this.getSlotByReference(slotReference);
     slot.lastError = "manual recycle requested";
-    await this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "manual")));
+    await this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "manual")));
     return this.getSummary();
   }
 
@@ -355,14 +374,13 @@ export class AgesConnectionPool {
     }
 
     const endpoint = this.buildFunctionEndpoint(kind, functionName);
-    const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
     const isInternalBeat = this.isInternalBeatEndpoint(kind, endpoint);
     const excludedSlotIds = new Set<number>();
     let damagedSlotRetryAttempt = 0;
 
     while (true) {
       const attemptBrokerInMs = Date.now();
-      const trace = this.createTimingTrace(kind, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, attemptBrokerInMs);
+      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
       trace.slotWaitStartAt = new Date().toISOString();
       const slot = await this.acquireSlot(kind, {
         allowGrow: !this.warmupPromise && !isInternalBeat,
@@ -370,6 +388,8 @@ export class AgesConnectionPool {
         excludeSlotIds: excludedSlotIds
       });
       const slotAcquiredMs = Date.now();
+      const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
+      trace.url = this.formatUrl(agesUrl);
       trace.slot = this.formatSlot(slot);
       trace.slotDynamic = slot.dynamic;
       trace.slotAcquiredAt = new Date(slotAcquiredMs).toISOString();
@@ -476,6 +496,7 @@ export class AgesConnectionPool {
         return {
           slotId: slot.id,
           slotKind: slot.kind,
+          backendId: slot.backendId,
           agesUrl,
           status: response.status,
           headers: this.responseHeadersToObject(response.headers),
@@ -592,11 +613,11 @@ export class AgesConnectionPool {
           `st=${slot.status}`
         ].join(" | ")
       );
-      await this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping")));
+      await this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "ping")));
       return;
     }
 
-    const pingUrl = this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping"));
+    const pingUrl = this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "ping"));
 
     try {
       const response = await this.fetchWithTimeout(pingUrl, {
@@ -1102,12 +1123,17 @@ export class AgesConnectionPool {
 
   private createSlot(kind: AgesPoolSlotKind, dynamic: boolean): AgesPoolSlot {
     const endpoint = kind === "mini" ? "/~mini~/dummy_val.ages" : "dummy_val.ages";
+    const backend = chooseLeastLoadedBackend(
+      this.backendConfiguration.backends,
+      this.slots.map((slot) => slot.backendId)
+    );
 
     return {
       id: this.nextSlotId++,
+      backendId: backend.id,
       kind,
       endpoint,
-      url: this.resolveEndpoint(endpoint),
+      url: resolveBackendEndpoint(backend.baseUrl, endpoint),
       warmupResponse: "",
       agesToken: "",
       aspNetSessionId: "",
@@ -1286,6 +1312,11 @@ export class AgesConnectionPool {
 
   private resolveEndpoint(endpoint: string): string {
     return `${this.baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+  }
+
+  private resolveSlotEndpoint(slot: AgesPoolSlot, endpoint: string): string {
+    const backend = this.backendConfiguration.backends.find((item) => item.id === slot.backendId);
+    return resolveBackendEndpoint(backend?.baseUrl ?? this.baseUrl, endpoint);
   }
 
   private formatSlotId(slotId: number): string {
@@ -1623,6 +1654,40 @@ function isConfigEnabled(name: string, fallback = false): boolean {
 
 function shortError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function resolveBackendConfiguration(
+  env: { HAAGES_A?: string; HAAGES_B?: string },
+  legacyBaseUrl = AGES_BASE_URL
+): AgesBackendConfiguration {
+  const backendA = env.HAAGES_A?.trim() ?? "";
+  const backendB = env.HAAGES_B?.trim() ?? "";
+  if (Boolean(backendA) !== Boolean(backendB)) {
+    throw new Error("HAAGES_A and HAAGES_B must be configured together");
+  }
+  if (!backendA) {
+    return { mode: "legacy", backends: [{ id: "legacy", baseUrl: legacyBaseUrl }] };
+  }
+  for (const value of [backendA, backendB]) {
+    const parsed = new URL(value);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error(`Invalid AGES backend URL: ${value}`);
+  }
+  return { mode: "dual", backends: [{ id: "A", baseUrl: backendA }, { id: "B", baseUrl: backendB }] };
+}
+
+export function chooseLeastLoadedBackend(
+  backends: AgesBackendConfiguration["backends"],
+  assigned: AgesBackendId[]
+): AgesBackendConfiguration["backends"][number] {
+  return backends.reduce((best, candidate) =>
+    assigned.filter((id) => id === candidate.id).length < assigned.filter((id) => id === best.id).length
+      ? candidate
+      : best
+  );
+}
+
+function resolveBackendEndpoint(baseUrl: string, endpoint: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
 }
 
 export const agesConnectionPool = new AgesConnectionPool();

@@ -11,6 +11,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var _a, _b, _c, _d, _e;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.agesConnectionPool = exports.AgesConnectionPool = void 0;
+exports.resolveBackendConfiguration = resolveBackendConfiguration;
+exports.chooseLeastLoadedBackend = chooseLeastLoadedBackend;
 require("dotenv/config");
 const child_process_1 = require("child_process");
 const fs_1 = require("fs");
@@ -41,8 +43,9 @@ const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COO
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 const initialEndpoints = createInitialEndpoints();
 class AgesConnectionPool {
-    constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints) {
+    constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints, backendConfiguration = resolveBackendConfiguration(process.env, baseUrl)) {
         this.baseUrl = baseUrl;
+        this.slots = [];
         this.nextSlotId = 1;
         this.nextSlotIndex = 0;
         this.pingSweepRunning = false;
@@ -56,7 +59,8 @@ class AgesConnectionPool {
             mini: []
         };
         this.growPromises = {};
-        this.slots = endpoints.map((item) => this.createSlot(item.kind, false));
+        this.backendConfiguration = backendConfiguration;
+        endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
     }
     warmUp() {
         return __awaiter(this, arguments, void 0, function* (reason = "warmup requested") {
@@ -110,6 +114,7 @@ class AgesConnectionPool {
     getSummary() {
         const slots = this.slots.map((slot) => ({
             id: slot.id,
+            backendId: slot.backendId,
             kind: slot.kind,
             status: slot.status,
             lastStatusCode: slot.lastStatusCode,
@@ -128,6 +133,8 @@ class AgesConnectionPool {
         }));
         return {
             baseUrl: this.baseUrl,
+            mode: this.backendConfiguration.mode,
+            backends: this.backendConfiguration.backends.map((backend) => (Object.assign(Object.assign({}, backend), { slots: this.slots.filter((slot) => slot.backendId === backend.id).length }))),
             size: this.slots.length,
             ready: this.slots.filter((slot) => slot.status === "ready").length,
             warming: this.slots.filter((slot) => slot.status === "warming").length,
@@ -163,7 +170,7 @@ class AgesConnectionPool {
     request(slotId_1, endpoint_1) {
         return __awaiter(this, arguments, void 0, function* (slotId, endpoint, init = {}) {
             const slot = this.getSlot(slotId);
-            const response = yield fetch(this.resolveEndpoint(endpoint), Object.assign(Object.assign({}, init), { headers: this.buildSessionHeaders(slot, init.headers) }));
+            const response = yield fetch(this.resolveSlotEndpoint(slot, endpoint), Object.assign(Object.assign({}, init), { headers: this.buildSessionHeaders(slot, init.headers) }));
             this.captureSessionState(slot, response);
             return response;
         });
@@ -183,7 +190,7 @@ class AgesConnectionPool {
         return __awaiter(this, void 0, void 0, function* () {
             const slot = this.getSlotByReference(slotReference);
             slot.lastError = "manual recycle requested";
-            yield this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "manual")));
+            yield this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "manual")));
             return this.getSummary();
         });
     }
@@ -206,13 +213,12 @@ class AgesConnectionPool {
                 throw new Error(`AGES ${kind} pool is still in warmup`);
             }
             const endpoint = this.buildFunctionEndpoint(kind, functionName);
-            const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
             const isInternalBeat = this.isInternalBeatEndpoint(kind, endpoint);
             const excludedSlotIds = new Set();
             let damagedSlotRetryAttempt = 0;
             while (true) {
                 const attemptBrokerInMs = Date.now();
-                const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", agesUrl, sourceIp, sourceIpSource, attemptBrokerInMs);
+                const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
                 trace.slotWaitStartAt = new Date().toISOString();
                 const slot = yield this.acquireSlot(kind, {
                     allowGrow: !this.warmupPromise && !isInternalBeat,
@@ -220,6 +226,8 @@ class AgesConnectionPool {
                     excludeSlotIds: excludedSlotIds
                 });
                 const slotAcquiredMs = Date.now();
+                const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
+                trace.url = this.formatUrl(agesUrl);
                 trace.slot = this.formatSlot(slot);
                 trace.slotDynamic = slot.dynamic;
                 trace.slotAcquiredAt = new Date(slotAcquiredMs).toISOString();
@@ -303,6 +311,7 @@ class AgesConnectionPool {
                     return {
                         slotId: slot.id,
                         slotKind: slot.kind,
+                        backendId: slot.backendId,
                         agesUrl,
                         status: response.status,
                         headers: this.responseHeadersToObject(response.headers),
@@ -408,10 +417,10 @@ class AgesConnectionPool {
                     this.formatSlot(slot),
                     `st=${slot.status}`
                 ].join(" | "));
-                yield this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping")));
+                yield this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "ping")));
                 return;
             }
-            const pingUrl = this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping"));
+            const pingUrl = this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "ping"));
             try {
                 const response = yield this.fetchWithTimeout(pingUrl, {
                     method: "GET",
@@ -798,11 +807,13 @@ class AgesConnectionPool {
     }
     createSlot(kind, dynamic) {
         const endpoint = kind === "mini" ? "/~mini~/dummy_val.ages" : "dummy_val.ages";
+        const backend = chooseLeastLoadedBackend(this.backendConfiguration.backends, this.slots.map((slot) => slot.backendId));
         return {
             id: this.nextSlotId++,
+            backendId: backend.id,
             kind,
             endpoint,
-            url: this.resolveEndpoint(endpoint),
+            url: resolveBackendEndpoint(backend.baseUrl, endpoint),
             warmupResponse: "",
             agesToken: "",
             aspNetSessionId: "",
@@ -948,6 +959,11 @@ class AgesConnectionPool {
     }
     resolveEndpoint(endpoint) {
         return `${this.baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+    }
+    resolveSlotEndpoint(slot, endpoint) {
+        var _a;
+        const backend = this.backendConfiguration.backends.find((item) => item.id === slot.backendId);
+        return resolveBackendEndpoint((_a = backend === null || backend === void 0 ? void 0 : backend.baseUrl) !== null && _a !== void 0 ? _a : this.baseUrl, endpoint);
     }
     formatSlotId(slotId) {
         return slotId.toString().padStart(2, "0");
@@ -1229,5 +1245,30 @@ function isConfigEnabled(name, fallback = false) {
 }
 function shortError(error) {
     return error instanceof Error ? error.message : String(error);
+}
+function resolveBackendConfiguration(env, legacyBaseUrl = AGES_BASE_URL) {
+    var _a, _b, _c, _d;
+    const backendA = (_b = (_a = env.HAAGES_A) === null || _a === void 0 ? void 0 : _a.trim()) !== null && _b !== void 0 ? _b : "";
+    const backendB = (_d = (_c = env.HAAGES_B) === null || _c === void 0 ? void 0 : _c.trim()) !== null && _d !== void 0 ? _d : "";
+    if (Boolean(backendA) !== Boolean(backendB)) {
+        throw new Error("HAAGES_A and HAAGES_B must be configured together");
+    }
+    if (!backendA) {
+        return { mode: "legacy", backends: [{ id: "legacy", baseUrl: legacyBaseUrl }] };
+    }
+    for (const value of [backendA, backendB]) {
+        const parsed = new URL(value);
+        if (!["http:", "https:"].includes(parsed.protocol))
+            throw new Error(`Invalid AGES backend URL: ${value}`);
+    }
+    return { mode: "dual", backends: [{ id: "A", baseUrl: backendA }, { id: "B", baseUrl: backendB }] };
+}
+function chooseLeastLoadedBackend(backends, assigned) {
+    return backends.reduce((best, candidate) => assigned.filter((id) => id === candidate.id).length < assigned.filter((id) => id === best.id).length
+        ? candidate
+        : best);
+}
+function resolveBackendEndpoint(baseUrl, endpoint) {
+    return `${baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
 }
 exports.agesConnectionPool = new AgesConnectionPool();

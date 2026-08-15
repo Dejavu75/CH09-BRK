@@ -49,6 +49,13 @@ Revisar primero:
 3. que el pool tenga slots `ready` antes de declarar el broker operativo;
 4. que los artefactos Postman/OpenAPI coincidan con `SSD.md`.
 
+## Upstream AGES dual opcional
+
+`HAAGES` conserva el comportamiento existente. Para repartir slots entre dos upstreams
+independientes, configurar juntas `HAAGES_A` y `HAAGES_B`; una configuración parcial o
+una URL que no sea HTTP(S) impide el arranque. Cada slot mantiene permanentemente su
+backend, token y cookie de sesión. `GET /pool` muestra el modo y la afinidad resultante.
+
 ## Enlaces del ecosistema
 
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`

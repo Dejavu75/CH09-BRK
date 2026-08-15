@@ -144,6 +144,7 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       .status(result.status)
       .setHeader("X-CH09-BRK-Pool-Slot", result.slotId.toString().padStart(2, "0"))
       .setHeader("X-CH09-BRK-Pool-Kind", result.slotKind)
+      .setHeader("X-CH09-BRK-Backend", result.backendId)
       .send(result.body);
   } catch (error) {
     const sourceIp = getSourceIp(req);
@@ -710,7 +711,7 @@ function renderPoolPage(req: Request): string {
     <header>
       <div>
         <h1>CH09-BRK Pool</h1>
-        <div id="base" class="base">${escapeHtml(pool.baseUrl)}</div>
+        <div id="base" class="base">${escapeHtml(`${pool.mode}: ${pool.backends.map((backend) => `${backend.id}=${backend.baseUrl}`).join(" · ")}`)}</div>
       </div>
       <div class="actions">
         <a class="nav-button" href="${escapeHtml(timingsShowPath)}">Timings</a>
@@ -826,6 +827,7 @@ function renderPoolPage(req: Request): string {
       return '<article class="slot">' +
         '<div class="slot-head"><div class="slot-id">' + name + '</div><span class="badge ' + escapeHtml(slot.status) + '">' + escapeHtml(slot.status) + '</span></div>' +
         '<dl>' +
+          '<dt>Backend</dt><dd>' + escapeHtml(slot.backendId) + '</dd>' +
           '<dt>Kind</dt><dd>' + (slot.kind === "mini" ? "Mini" : "BigBoy") + '</dd>' +
           '<dt>Modo</dt><dd>' + (slot.dynamic ? "Adaptativo" : "Base") + '</dd>' +
           '<dt>Uso</dt><dd>' + (slot.inUse ? "En uso" : "Libre") + '</dd>' +
@@ -846,7 +848,7 @@ function renderPoolPage(req: Request): string {
 
     function renderPool(pool) {
       currentPool = pool;
-      base.textContent = pool.baseUrl;
+      base.textContent = pool.mode + ": " + pool.backends.map((backend) => backend.id + "=" + backend.baseUrl).join(" · ");
       summary.innerHTML = renderSummary(pool);
       queues.innerHTML = renderQueues(pool);
       slots.innerHTML = pool.slots.map(renderSlot).join("");
@@ -991,6 +993,7 @@ function renderSlotCard(basePath: string, slot: ReturnType<typeof agesConnection
       <span class="badge ${escapeHtml(slot.status)}">${escapeHtml(slot.status)}</span>
     </div>
     <dl>
+      <dt>Backend</dt><dd>${escapeHtml(slot.backendId)}</dd>
       <dt>Kind</dt><dd>${slot.kind === "mini" ? "Mini" : "BigBoy"}</dd>
       <dt>Modo</dt><dd>${slot.dynamic ? "Adaptativo" : "Base"}</dd>
       <dt>Uso</dt><dd>${slot.inUse ? "En uso" : "Libre"}</dd>
