@@ -79,8 +79,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\provision-ages-dua
 
 Cuando se autorice, abrir PowerShell **como administrador** y usar `-Mode Apply`.
 Para retirar solamente los recursos registrados y todavía coincidentes con su
-fingerprint, usar `-Mode Rollback`. El estado transaccional queda junto al script;
-no borrarlo manualmente. `ages-dual.env.example` contiene las URLs y nombres de pool
+fingerprint, usar `-Mode Rollback`. El estado transaccional y las raíces vacías de los
+sites quedan bajo `%ProgramData%\Solinges\CH09-BRK`; no borrarlos manualmente.
+Si existe un ledger v1 junto al script, retirarlo primero con el provisioner v1.
+`ages-dual.env.example` contiene las URLs y nombres de pool
 que luego pueden copiarse al entorno local, sin secretos.
 
 ## Enlaces del ecosistema

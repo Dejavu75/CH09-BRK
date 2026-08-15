@@ -7,9 +7,10 @@ const scriptPath = require("node:path").resolve(__dirname, "../scripts/provision
 const source = readFileSync(scriptPath, "utf8");
 
 test("IIS provisioning script parses without executing IIS mutations", (t) => {
-  const probe = spawnSync("pwsh", ["-NoProfile", "-Command", "$null = Get-Command pwsh"], { encoding: "utf8" });
+  const shell = process.platform === "win32" ? "powershell.exe" : "pwsh";
+  const probe = spawnSync(shell, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], { encoding: "utf8" });
   if (probe.error?.code === "ENOENT") return t.skip("pwsh unavailable");
-  const parsed = spawnSync("pwsh", ["-NoProfile", "-Command",
+  const parsed = spawnSync(shell, ["-NoProfile", "-Command",
     "$e=$null; [Management.Automation.Language.Parser]::ParseFile($env:SCRIPT_TO_PARSE,[ref]$null,[ref]$e)|Out-Null; if($e.Count){$e|% Message;exit 1}"],
     { encoding: "utf8", env: { ...process.env, SCRIPT_TO_PARSE: scriptPath } });
   assert.equal(parsed.status, 0, parsed.stdout + parsed.stderr);
@@ -26,6 +27,9 @@ test("fails closed on unowned resources and records intent before creation", () 
   const createSite = source.indexOf("New-Website", pendingSite);
   assert.ok(pendingPool >= 0 && pendingPool < savePool && savePool < createPool);
   assert.ok(pendingSite >= 0 && pendingSite < saveSite && saveSite < createSite);
+  const pendingDirectory = source.indexOf("type = 'directory'; name = $target.Root; status = 'pending'");
+  assert.ok(pendingDirectory >= 0 && pendingDirectory < source.indexOf("Save-Ledger $ledger", pendingDirectory));
+  assert.ok(source.indexOf("Save-Ledger $ledger", pendingDirectory) < source.indexOf("New-Item -ItemType Directory", pendingDirectory));
   assert.match(source, /apply-failed-clean/);
   assert.match(source, /apply-cleanup'; Save-Ledger/);
   assert.match(source, /previous Apply requires recovery; run -Mode Rollback/);
@@ -45,6 +49,9 @@ test("pins the local topology and disables synchronized periodic recycling", () 
   assert.match(source, /periodicRestart\.time -Value \(\[TimeSpan\]::Zero\)/);
   assert.match(source, /processModel\.maxProcesses -Value 1/);
   assert.match(source, /recycling\.disallowOverlappingRotation -Value \$false/);
+  assert.match(source, /New-Website[^\r\n]+-PhysicalPath \$target\.Root/);
+  assert.match(source, /New-WebApplication[^\r\n]+-PhysicalPath \$context\.PhysicalPath/);
+  assert.doesNotMatch(source, /New-Website[^\r\n]+-PhysicalPath \$context\.PhysicalPath/);
 });
 
 test("rollback persists resumable progress and refuses non-exclusive ownership", () => {
@@ -56,4 +63,13 @@ test("rollback persists resumable progress and refuses non-exclusive ownership",
   assert.match(source, /applications = \$applications/);
   assert.match(source, /bindings = \$bindings/);
   assert.match(source, /has foreign consumers; refusing deletion/);
+  assert.match(source, /CommonApplicationData.+Solinges\\CH09-BRK/);
+  assert.match(source, /AGES-dual\/v2/);
+  assert.match(source, /schema = \$Schema/);
+  assert.match(source, /\$ledger\.schema -ne \$Schema/);
+  assert.match(source, /Legacy v1 ledger found.+Roll back with the v1 provisioner before upgrading/);
+  assert.match(source, /Get-DirectoryFingerprint/);
+  assert.match(source, /contains foreign content; refusing deletion/);
+  assert.match(source, /Remove-OwnedDirectory \$entry\.name/);
+  assert.doesNotMatch(source, /Remove-Item[^\r\n]+-Recurse/);
 });

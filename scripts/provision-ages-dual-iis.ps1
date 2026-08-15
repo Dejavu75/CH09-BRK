@@ -6,12 +6,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $StatePath) { $StatePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'ages-dual-iis.state.json' }
-$Owner = 'CH09-BRK/AGES-dual/v1'
+$StatePathExplicit = [bool]$StatePath
+$LegacyStatePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'ages-dual-iis.state.json'
+$RuntimeRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Solinges\CH09-BRK'
+if (-not $StatePath) { $StatePath = Join-Path $RuntimeRoot 'ages-dual-iis.state.json' }
+$Owner = 'CH09-BRK/AGES-dual/v2'
+$Schema = 2
+if (-not $StatePathExplicit -and (Test-Path -LiteralPath $LegacyStatePath)) {
+  throw "Legacy v1 ledger found at '$LegacyStatePath'. Roll back with the v1 provisioner before upgrading."
+}
 $ExpectedPath = 'C:\Sistema\AGES'
 $Targets = @(
-  [pscustomobject]@{ Id = 'A'; Pool = 'AGES_A'; Site = 'AGES_A_Local'; Port = 18081 },
-  [pscustomobject]@{ Id = 'B'; Pool = 'AGES_B'; Site = 'AGES_B_Local'; Port = 18082 }
+  [pscustomobject]@{ Id = 'A'; Pool = 'AGES_A'; Site = 'AGES_A_Local'; Port = 18081; Root = Join-Path $RuntimeRoot 'iis-roots\AGES_A_Local' },
+  [pscustomobject]@{ Id = 'B'; Pool = 'AGES_B'; Site = 'AGES_B_Local'; Port = 18082; Root = Join-Path $RuntimeRoot 'iis-roots\AGES_B_Local' }
 )
 
 function Test-IsAdministrator {
@@ -76,24 +83,32 @@ function Get-SiteFingerprint($target, [string]$physicalPath) {
   } | ConvertTo-Json -Compress)
 }
 
+function Get-DirectoryFingerprint([string]$path) {
+  $entries = @(Get-ChildItem -LiteralPath $path -Force | ForEach-Object { "$($_.Name)|$($_.PSIsContainer)" } | Sort-Object)
+  return ([ordered]@{ path = Resolve-EffectivePath $path; entries = $entries } | ConvertTo-Json -Compress)
+}
+
+function Remove-OwnedDirectory([string]$path) {
+  if (@(Get-ChildItem -LiteralPath $path -Force).Count) { throw "Owned directory '$path' contains foreign content; refusing deletion." }
+  Remove-Item -LiteralPath $path
+}
+
 function Get-ResourceFingerprint($entry) {
   if ($entry.type -eq 'pool') { return Get-PoolFingerprint $entry.name }
+  if ($entry.type -eq 'directory') { return Get-DirectoryFingerprint $entry.name }
   $target = $Targets | Where-Object Site -eq $entry.name
   return Get-SiteFingerprint $target $entry.physicalPath
 }
 
 function Test-ResourceExists($entry) {
   if ($entry.type -eq 'pool') { return Test-Path "IIS:\AppPools\$($entry.name)" }
+  if ($entry.type -eq 'directory') { return Test-Path -LiteralPath $entry.name }
   return [bool](Get-Website -Name $entry.name -ErrorAction SilentlyContinue)
 }
 
 function Assert-ExclusivePoolUse($entry) {
-  $target = $Targets | Where-Object Pool -eq $entry.name
-  $ownedApplication = Get-WebApplication -Site $target.Site -Name 'AGES'
-  $foreignSites = @(Get-Website | Where-Object { $_.ApplicationPool -eq $entry.name -and $_.Name -ne $target.Site })
-  $foreignApps = @(Get-WebApplication | Where-Object {
-    $_.ApplicationPool -eq $entry.name -and $_.ItemXPath -ne $ownedApplication.ItemXPath
-  })
+  $foreignSites = @(Get-Website | Where-Object ApplicationPool -eq $entry.name)
+  $foreignApps = @(Get-WebApplication | Where-Object ApplicationPool -eq $entry.name)
   if ($foreignSites.Count -or $foreignApps.Count) { throw "AppPool '$($entry.name)' has foreign consumers; refusing deletion." }
 }
 
@@ -155,7 +170,7 @@ function Set-PoolConfiguration($target, $source) {
 }
 
 function Assert-OwnedState($ledger) {
-  if ($ledger.owner -ne $Owner -or $ledger.status -ne 'complete') { throw 'State ledger is incomplete or belongs to another provisioner.' }
+  if ($ledger.owner -ne $Owner -or $ledger.schema -ne $Schema -or $ledger.status -ne 'complete') { throw 'State ledger is incomplete or belongs to another provisioner.' }
   foreach ($entry in $ledger.resources) {
     if ($entry.status -ne 'created' -or (Get-ResourceFingerprint $entry) -ne $entry.fingerprint) {
       throw "Owned resource '$($entry.name)' no longer matches its exact fingerprint."
@@ -179,8 +194,9 @@ function Invoke-Apply {
     }
   }
   foreach ($target in $Targets) {
-    if ((Test-Path "IIS:\AppPools\$($target.Pool)") -or (Get-Website -Name $target.Site -ErrorAction SilentlyContinue)) {
-      throw "Target '$($target.Pool)' or '$($target.Site)' already exists without ownership state."
+    if ((Test-Path "IIS:\AppPools\$($target.Pool)") -or (Get-Website -Name $target.Site -ErrorAction SilentlyContinue) -or
+        (Test-Path -LiteralPath $target.Root)) {
+      throw "Target '$($target.Pool)', '$($target.Site)' or '$($target.Root)' already exists without ownership state."
     }
   }
   if (@('SpecificUser', '3') -contains [string]$context.SourcePool.processModel.identityType -and
@@ -188,7 +204,7 @@ function Invoke-Apply {
     throw 'SpecificUser credentials cannot be read securely; refusing all mutations.'
   }
 
-  $ledger = [ordered]@{ owner = $Owner; status = 'applying'; backup = "AGES-dual-$((Get-Date).ToString('yyyyMMdd-HHmmss'))-$PID"; resources = @() }
+  $ledger = [ordered]@{ owner = $Owner; schema = $Schema; status = 'applying'; backup = "AGES-dual-$((Get-Date).ToString('yyyyMMdd-HHmmss'))-$PID"; resources = @() }
   Save-Ledger $ledger
   $createdThisRun = [Collections.Generic.List[object]]::new()
   try {
@@ -202,9 +218,16 @@ function Invoke-Apply {
       if ((Get-PoolFingerprint $target.Pool) -ne $poolEntry.fingerprint) { throw "AppPool '$($target.Pool)' configuration mismatch." }
       $poolEntry.status = 'created'; Save-Ledger $ledger
 
+      $directoryEntry = [ordered]@{ type = 'directory'; name = $target.Root; status = 'pending'; fingerprint = '' }
+      $ledger.resources += $directoryEntry; Save-Ledger $ledger
+      New-Item -ItemType Directory -Path $target.Root | Out-Null
+      $createdThisRun.Add([pscustomobject]@{ type = 'directory'; name = $target.Root })
+      $directoryEntry.fingerprint = Get-DirectoryFingerprint $target.Root
+      $directoryEntry.status = 'created'; Save-Ledger $ledger
+
       $siteEntry = [ordered]@{ type = 'site'; name = $target.Site; status = 'pending'; physicalPath = $context.PhysicalPath; fingerprint = '' }
       $ledger.resources += $siteEntry; Save-Ledger $ledger
-      New-Website -Name $target.Site -Port $target.Port -IPAddress '*' -PhysicalPath $context.PhysicalPath -ApplicationPool $target.Pool | Out-Null
+      New-Website -Name $target.Site -Port $target.Port -IPAddress '*' -PhysicalPath $target.Root -ApplicationPool $target.Pool | Out-Null
       $createdThisRun.Add([pscustomobject]@{ type = 'site'; name = $target.Site })
       New-WebApplication -Site $target.Site -Name 'AGES' -PhysicalPath $context.PhysicalPath -ApplicationPool $target.Pool | Out-Null
       $siteEntry.fingerprint = Get-SiteFingerprint $target $context.PhysicalPath
@@ -221,6 +244,7 @@ function Invoke-Apply {
       $entry.status = 'deleting'; Save-Ledger $ledger
       try {
         if ($resource.type -eq 'site') { Remove-Website -Name $resource.name }
+        elseif ($resource.type -eq 'directory') { Remove-OwnedDirectory $resource.name }
         else { Remove-WebAppPool -Name $resource.name }
         $entry.status = 'deleted'; Save-Ledger $ledger
       } catch { $cleanupFailed = $true }
@@ -238,7 +262,7 @@ function Invoke-Rollback {
   Assert-Prerequisites $true $false | Out-Null
   if (-not (Test-Path $StatePath)) { throw 'No owned state ledger exists; refusing rollback.' }
   $ledger = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json
-  if ($ledger.owner -ne $Owner -or @('complete', 'apply-cleanup', 'rolling-back', 'rollback-complete') -notcontains $ledger.status) {
+  if ($ledger.owner -ne $Owner -or $ledger.schema -ne $Schema -or @('complete', 'apply-cleanup', 'rolling-back', 'rollback-complete') -notcontains $ledger.status) {
     throw 'State ledger is not eligible for rollback.'
   }
   if ($ledger.status -eq 'apply-cleanup') {
@@ -267,6 +291,7 @@ function Invoke-Rollback {
       if ($entry.type -eq 'pool') { Assert-ExclusivePoolUse $entry }
       $entry.status = 'deleting'; Save-Ledger $ledger
       if ($entry.type -eq 'site') { Remove-Website -Name $entry.name }
+      elseif ($entry.type -eq 'directory') { Remove-OwnedDirectory $entry.name }
       else { Remove-WebAppPool -Name $entry.name }
       $entry.status = 'deleted'; Save-Ledger $ledger
     }
