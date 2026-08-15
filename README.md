@@ -66,6 +66,23 @@ no se aceptan comandos configurables. Ajustar el drenaje y SSH con
 El reciclado automático dual se limita a respuestas HTTP 503 correlacionadas con un
 slot. Detectar automáticamente el HTTP 500 del error COM queda como seguimiento.
 
+### Preparación IIS local
+
+`scripts/provision-ages-dual-iis.ps1` prepara dos procesos IIS independientes sobre
+la aplicación local `/AGES`, sin modificar el pool ni la aplicación `AGES` originales.
+Primero ejecutar una inspección sin cambios:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\provision-ages-dual-iis.ps1 -Mode Plan
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\provision-ages-dual-iis.ps1 -Mode Validate
+```
+
+Cuando se autorice, abrir PowerShell **como administrador** y usar `-Mode Apply`.
+Para retirar solamente los recursos registrados y todavía coincidentes con su
+fingerprint, usar `-Mode Rollback`. El estado transaccional queda junto al script;
+no borrarlo manualmente. `ages-dual.env.example` contiene las URLs y nombres de pool
+que luego pueden copiarse al entorno local, sin secretos.
+
 ## Enlaces del ecosistema
 
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
