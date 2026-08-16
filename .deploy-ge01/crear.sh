@@ -19,6 +19,15 @@ LOG_PATH="$(read_env LOG_PATH)"
 CERT_PATH="$(read_env CERT_PATH)"
 CERTBOT_WEBROOT_PATH="$(read_env CERTBOT_WEBROOT_PATH)"
 SSH_PUBLIC_KEY_HOST_PATH="$(read_env SSH_PUBLIC_KEY_HOST_PATH)"
+SSH_KEY_HOST_PATH="$(read_env SSH_KEY_HOST_PATH)"
+
+KEY_VALIDATOR="$(cd "$(dirname "$0")/.." && pwd)/scripts/setup-broker-iis-ssh-key.sh"
+if [[ ! -x "$KEY_VALIDATOR" ]]; then
+  echo "No se encuentra el validador de identidad SSH: $KEY_VALIDATOR" >&2
+  exit 1
+fi
+SSH_KEY_HOST_PATH="$SSH_KEY_HOST_PATH" SSH_PUBLIC_KEY_HOST_PATH="$SSH_PUBLIC_KEY_HOST_PATH" \
+  "$KEY_VALIDATOR" --validate-only
 
 mkdir -p "$CONFIG_PATH" "$LOG_PATH" "$CERT_PATH" "$CERTBOT_WEBROOT_PATH" "$SSH_PUBLIC_KEY_HOST_PATH"
 cp ./.env "$CONFIG_PATH/.env"

@@ -66,6 +66,39 @@ no se aceptan comandos configurables. Ajustar el drenaje y SSH con
 El reciclado automático dual se limita a respuestas HTTP 503 correlacionadas con un
 slot. Detectar automáticamente el HTTP 500 del error COM queda como seguimiento.
 
+### Identidad SSH del broker
+
+La imagen no genera ni contiene claves SSH. La identidad se crea una sola vez en el
+host Docker, queda persistida fuera del contenedor y se monta en modo de solo lectura.
+En un host Linux, definir las dos rutas persistentes y ejecutar:
+
+```bash
+export SSH_KEY_HOST_PATH=/srv/solinges/ecosystem/ch09-brk/keys
+export SSH_PUBLIC_KEY_HOST_PATH=/srv/solinges/ecosystem/ch09-brk/ssh-public
+./scripts/setup-broker-iis-ssh-key.sh
+```
+
+El script conserva un par existente, rechaza estados parciales o claves que no
+coincidan y exporta solamente `ssh-public/ch09_brk_iis.pub`. La clave privada
+`keys/ch09_brk_iis` no se copia al servidor Windows, no se agrega a la imagen y el
+Compose la monta mediante `${SSH_KEY_HOST_PATH}:/run/secrets/ch09-brk-iis:ro`.
+El arranque rechaza archivos simbólicos y pares ausentes o inconsistentes; después
+copia la privada a un `tmpfs` interno con modo 600. Esto mantiene segura la clave
+aunque Docker Desktop represente un bind de `C:` con modo 777 dentro de Linux.
+
+Copiar **únicamente** `ch09_brk_iis.pub` al servidor IIS y, desde PowerShell elevado
+en ese servidor, autorizarla con:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-broker-iis-public-key.ps1 `
+  -PublicKeyPath C:\RutaTemporal\ch09_brk_iis.pub
+```
+
+El instalador rechaza reparse points, reemplaza la ACL y el propietario antes de
+escribir, y verifica que `administrators_authorized_keys` permita exclusivamente
+control total a Administradores y SYSTEM.
+Después de verificar acceso con `BatchMode=yes`, borrar la copia pública temporal.
+
 ### Preparación IIS local
 
 `scripts/provision-ages-dual-iis.ps1` prepara dos procesos IIS independientes sobre

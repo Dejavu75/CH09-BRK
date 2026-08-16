@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { execFile } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync, statSync } from "fs";
 import { promisify } from "util";
 
 import { log, sendDebugMail, warn } from "../utils/logger";
@@ -25,7 +25,7 @@ const ADAPTIVE_SWEEP_INTERVAL_MS = 60 * 1000;
 const ERROR_DEBUG_DETAILS = isConfigEnabled("ERROR_DEBUG_DETAILS", true);
 const AGES_SSH_HOST = process.env.AGES_SSH_HOST ?? getHostFromUrl(AGES_BASE_URL);
 const AGES_SSH_USER = process.env.AGES_SSH_USER ?? "";
-const AGES_SSH_KEY_PATH = process.env.AGES_SSH_KEY_PATH ?? "/app/keys/ch09_brk_iis";
+const AGES_SSH_KEY_PATH = process.env.AGES_SSH_KEY_PATH ?? "/run/secrets/ch09-brk-iis/ch09_brk_iis";
 const AGES_SSH_RESTART_COMMAND =
   process.env.AGES_SSH_RESTART_COMMAND ?? "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
@@ -1548,6 +1548,7 @@ export class AgesConnectionPool {
 
   private async recycleBackendAppPool(id: AgesBackendId): Promise<void> {
     if (!AGES_SSH_HOST || !AGES_SSH_USER) throw new Error("AGES SSH target is not configured");
+    validateSshPrivateKey(AGES_SSH_KEY_PATH);
     const pool = resolveIisAppPoolName(id, process.env);
     const command = `powershell -NoProfile -NonInteractive -Command "Import-Module WebAdministration; Restart-WebAppPool -Name '${pool}'"`;
     await execFileAsync("ssh", ["-i", AGES_SSH_KEY_PATH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
@@ -1572,6 +1573,13 @@ export class AgesConnectionPool {
 
     if (!AGES_SSH_HOST || !AGES_SSH_USER) {
       warn(`ages restart skip | reason=${reason} | err=missing AGES_SSH_HOST or AGES_SSH_USER`);
+      return false;
+    }
+
+    try {
+      validateSshPrivateKey(AGES_SSH_KEY_PATH);
+    } catch (error) {
+      warn(`ages restart skip | reason=${reason} | err=${formatError(error)}`);
       return false;
     }
 
@@ -1794,6 +1802,21 @@ function isConfigEnabled(name: string, fallback = false): boolean {
 
 function shortError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function validateSshPrivateKey(path: string): void {
+  let keyStat;
+  try {
+    keyStat = statSync(path);
+  } catch {
+    throw new Error(`AGES SSH private key is unavailable at ${path}`);
+  }
+  if (!keyStat.isFile() || keyStat.size === 0) {
+    throw new Error(`AGES SSH private key is not a non-empty regular file at ${path}`);
+  }
+  if (process.platform !== "win32" && (keyStat.mode & 0o077) !== 0) {
+    throw new Error(`AGES SSH private key permissions are too open at ${path}`);
+  }
 }
 
 export function resolveBackendConfiguration(

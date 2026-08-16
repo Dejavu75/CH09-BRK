@@ -286,13 +286,15 @@ CH09-BRK puede reiniciar IIS del host AGES por SSH.
 | --- | --- |
 | `AGES_SSH_HOST` | Host del servidor AGES/IIS. Si falta, se deriva de `HAAGES`. |
 | `AGES_SSH_USER` | Usuario SSH remoto. |
-| `AGES_SSH_KEY_PATH` | Clave privada dentro del contenedor. Default `/app/keys/ch09_brk_iis`. |
+| `AGES_SSH_KEY_PATH` | Copia efímera modo 600. Default `/run/ch09-brk-ssh/ch09_brk_iis`. |
 | `AGES_SSH_RESTART_COMMAND` | Comando remoto. Default `powershell -NoProfile -ExecutionPolicy Bypass -Command "iisreset /restart"`. |
 | `AGES_IIS_RESTART_COOLDOWN_SECONDS` | Cooldown entre reinicios. Default 300. |
 
 ### 8.2 Seguridad operativa
 
-- El contenedor genera/exporta una clave pública en `/app/ssh-public/ch09_brk_iis.pub`.
+- El host Docker genera una identidad persistente con `scripts/setup-broker-iis-ssh-key.sh`; la imagen nunca genera ni contiene la privada.
+- Compose monta `${SSH_KEY_HOST_PATH}` read-only, rechaza symlinks y valida el par; la privada se copia a un `tmpfs` modo 600 compatible con binds Windows que aparecen como 777.
+- Sólo `${SSH_PUBLIC_KEY_HOST_PATH}/ch09_brk_iis.pub` se transfiere al servidor IIS.
 - En Windows OpenSSH, si el usuario remoto es administrador, la clave debe ir en `C:\ProgramData\ssh\administrators_authorized_keys` con ACL correcta.
 - Debe existir lock/cooldown para evitar restart storms.
 - Las rutas de restart no deben quedar públicas sin protección.
@@ -320,7 +322,7 @@ Gotcha: el Dockerfile expone `3000 80 443`, pero la aplicación real escucha por
 | AGES | `HAAGES`, `AGES_API_KEY`, `AGES_SSH_HOST`, `AGES_SSH_USER`, `AGES_SSH_KEY_PATH`, `AGES_SSH_RESTART_COMMAND`, `AGES_IIS_RESTART_COOLDOWN_SECONDS` |
 | Pool | `slots_mini`, `slots_bigb`, `slots_mini_max`, `slots_bigb_max`, `slots_adaptive_hold_minutes` |
 | SSL/certbot | `CERTBOT_DOMAIN`, `CERTBOT_EMAIL`, `SSL_CERT_DOMAIN`, `SSL_CERT_PATH`, `SSL_KEY_PATH`, `CERT_PATH_CONTAINER`, `CERTBOT_WEBROOT` |
-| Paths | `CONFIG_PATH`, `LOG_PATH`, `CERT_PATH`, `CERTBOT_WEBROOT_PATH`, `SSH_PUBLIC_KEY_HOST_PATH`, `LOGDIR` |
+| Paths | `CONFIG_PATH`, `LOG_PATH`, `CERT_PATH`, `CERTBOT_WEBROOT_PATH`, `SSH_KEY_HOST_PATH`, `SSH_PUBLIC_KEY_HOST_PATH`, `LOGDIR` |
 | Behavior | `HIDE_404`, `ERROR_DEBUG_DETAILS` |
 | Model bases | `MODELBASES_PALLETS`, `MODELBASES_PRODUCTS`, `MODELBASES_WAREHOUSES` |
 
@@ -357,7 +359,10 @@ La imagen `dhzacur/ha_ch09_brk` depende de `build/` ya generado. El Dockerfile n
 | `${LOG_PATH}` | `/etc/nages2/logdir` | Logs. |
 | `${CONFIG_PATH}/.env` | `/app/.env` | Config runtime. |
 | `${CERT_PATH}` | `/app/certificados` | Certificados de la app. |
-| `${SSH_PUBLIC_KEY_HOST_PATH}` | `/app/ssh-public` | Export de clave pública SSH. |
+| `${SSH_KEY_HOST_PATH}` | `/run/secrets/ch09-brk-iis` (read-only) | Fuente persistente; runtime usa `/run/ch09-brk-ssh` como tmpfs modo 700. |
+
+`${SSH_PUBLIC_KEY_HOST_PATH}` no se monta en el contenedor: es el directorio host-side
+desde el que el operador transfiere únicamente `ch09_brk_iis.pub` al servidor IIS.
 | `${CERTBOT_WEBROOT_PATH}` | `/app/certbot-www` | Webroot challenge HTTP-01. |
 
 Certbot:

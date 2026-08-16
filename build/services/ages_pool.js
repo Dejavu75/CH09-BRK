@@ -38,7 +38,7 @@ const ADAPTIVE_SWEEP_INTERVAL_MS = 60 * 1000;
 const ERROR_DEBUG_DETAILS = isConfigEnabled("ERROR_DEBUG_DETAILS", true);
 const AGES_SSH_HOST = (_b = process.env.AGES_SSH_HOST) !== null && _b !== void 0 ? _b : getHostFromUrl(AGES_BASE_URL);
 const AGES_SSH_USER = (_c = process.env.AGES_SSH_USER) !== null && _c !== void 0 ? _c : "";
-const AGES_SSH_KEY_PATH = (_d = process.env.AGES_SSH_KEY_PATH) !== null && _d !== void 0 ? _d : "/app/keys/ch09_brk_iis";
+const AGES_SSH_KEY_PATH = (_d = process.env.AGES_SSH_KEY_PATH) !== null && _d !== void 0 ? _d : "/run/secrets/ch09-brk-iis/ch09_brk_iis";
 const AGES_SSH_RESTART_COMMAND = (_e = process.env.AGES_SSH_RESTART_COMMAND) !== null && _e !== void 0 ? _e : "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
 const AGES_SSH_COMMAND_TIMEOUT_MS = getEnvDurationSeconds("AGES_SSH_COMMAND_TIMEOUT_SECONDS", 30) * 1000;
@@ -1190,6 +1190,7 @@ class AgesConnectionPool {
         return __awaiter(this, void 0, void 0, function* () {
             if (!AGES_SSH_HOST || !AGES_SSH_USER)
                 throw new Error("AGES SSH target is not configured");
+            validateSshPrivateKey(AGES_SSH_KEY_PATH);
             const pool = resolveIisAppPoolName(id, process.env);
             const command = `powershell -NoProfile -NonInteractive -Command "Import-Module WebAdministration; Restart-WebAppPool -Name '${pool}'"`;
             yield execFileAsync("ssh", ["-i", AGES_SSH_KEY_PATH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
@@ -1211,6 +1212,13 @@ class AgesConnectionPool {
             }
             if (!AGES_SSH_HOST || !AGES_SSH_USER) {
                 (0, logger_1.warn)(`ages restart skip | reason=${reason} | err=missing AGES_SSH_HOST or AGES_SSH_USER`);
+                return false;
+            }
+            try {
+                validateSshPrivateKey(AGES_SSH_KEY_PATH);
+            }
+            catch (error) {
+                (0, logger_1.warn)(`ages restart skip | reason=${reason} | err=${formatError(error)}`);
                 return false;
             }
             this.agesHostRestartRunning = true;
@@ -1397,6 +1405,21 @@ function isConfigEnabled(name, fallback = false) {
 }
 function shortError(error) {
     return error instanceof Error ? error.message : String(error);
+}
+function validateSshPrivateKey(path) {
+    let keyStat;
+    try {
+        keyStat = (0, fs_1.statSync)(path);
+    }
+    catch (_a) {
+        throw new Error(`AGES SSH private key is unavailable at ${path}`);
+    }
+    if (!keyStat.isFile() || keyStat.size === 0) {
+        throw new Error(`AGES SSH private key is not a non-empty regular file at ${path}`);
+    }
+    if (process.platform !== "win32" && (keyStat.mode & 0o077) !== 0) {
+        throw new Error(`AGES SSH private key permissions are too open at ${path}`);
+    }
 }
 function resolveBackendConfiguration(env, legacyBaseUrl = AGES_BASE_URL) {
     var _a, _b, _c, _d;

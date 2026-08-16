@@ -12,10 +12,14 @@ services:
       - "${LOG_PATH}:/etc/nages2/logdir"
       - "${CONFIG_PATH}/.env:/app/.env"
       - "${CERT_PATH}:/app/certificados"
-      - "${SSH_PUBLIC_KEY_HOST_PATH}:/app/ssh-public"
+      - "${SSH_KEY_HOST_PATH}:/run/secrets/ch09-brk-iis:ro"
       - "${CERTBOT_WEBROOT_PATH}:/app/certbot-www"
+    tmpfs:
+      - /run/ch09-brk-ssh:mode=0700,size=1m
     environment:
-      SSH_PUBLIC_KEY_EXPORT_PATH: /app/ssh-public
+      SSH_IDENTITY_REQUIRED: "true"
+      AGES_SSH_KEY_PATH: /run/secrets/ch09-brk-iis/ch09_brk_iis
+      SSH_PUBLIC_KEY_PATH: /run/secrets/ch09-brk-iis/ch09_brk_iis.pub
       CERTBOT_WEBROOT: /app/certbot-www
       CERT_PATH_CONTAINER: /app/certificados
     networks:
