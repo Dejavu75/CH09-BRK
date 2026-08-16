@@ -2,6 +2,16 @@
 param(
   [ValidateSet('Apply', 'Rollback', 'Validate', 'Plan')]
   [string]$Mode = 'Plan',
+  [ValidateScript({ [IO.Path]::IsPathRooted($_) })]
+  [string]$ExpectedPath = 'C:\Sistema\AGES',
+  [ValidateScript({ if ($_ -eq '*') { $true } else { $parsed = $null; [Net.IPAddress]::TryParse($_, [ref]$parsed) } })]
+  [string]$BindAddress = '*',
+  [ValidatePattern('^[A-Za-z0-9_. -]{1,128}$')]
+  [string]$SourceSite = 'Default Web Site',
+  [ValidatePattern('^[A-Za-z0-9_.-]{1,128}$')]
+  [string]$SourceApp = 'AGES',
+  [ValidatePattern('^[A-Za-z0-9_. -]{1,128}$')]
+  [string]$SourcePool = 'AGES',
   [string]$StatePath = ''
 )
 
@@ -15,10 +25,9 @@ $Schema = 2
 if (-not $StatePathExplicit -and (Test-Path -LiteralPath $LegacyStatePath)) {
   throw "Legacy v1 ledger found at '$LegacyStatePath'. Roll back with the v1 provisioner before upgrading."
 }
-$ExpectedPath = 'C:\Sistema\AGES'
 $Targets = @(
-  [pscustomobject]@{ Id = 'A'; Pool = 'AGES_A'; Site = 'AGES_A_Local'; Port = 18081; Root = Join-Path $RuntimeRoot 'iis-roots\AGES_A_Local' },
-  [pscustomobject]@{ Id = 'B'; Pool = 'AGES_B'; Site = 'AGES_B_Local'; Port = 18082; Root = Join-Path $RuntimeRoot 'iis-roots\AGES_B_Local' }
+  [pscustomobject]@{ Id = 'A'; Pool = 'AGES_A'; Site = 'AGES_A_Local'; Port = 18081; Address = $BindAddress; Root = Join-Path $RuntimeRoot 'iis-roots\AGES_A_Local' },
+  [pscustomobject]@{ Id = 'B'; Pool = 'AGES_B'; Site = 'AGES_B_Local'; Port = 18082; Address = $BindAddress; Root = Join-Path $RuntimeRoot 'iis-roots\AGES_B_Local' }
 )
 
 function Test-IsAdministrator {
@@ -64,7 +73,7 @@ function Get-PoolFingerprint([string]$name) {
 
 function Get-SiteFingerprint($target, [string]$physicalPath) {
   $site = Get-Website -Name $target.Site
-  $app = Get-WebApplication -Site $target.Site -Name 'AGES'
+  $app = Get-WebApplication -Site $target.Site -Name $SourceApp
   $bindings = @(Get-WebBinding -Name $target.Site | ForEach-Object { "$($_.protocol)|$($_.bindingInformation)" } | Sort-Object)
   $applications = @(Get-WebApplication -Site $target.Site | ForEach-Object {
     "$($_.Path)|$($_.ApplicationPool)|$(Resolve-EffectivePath ([string]$_.PhysicalPath))"
@@ -118,18 +127,28 @@ function Assert-Prerequisites([bool]$mutation, [bool]$requireSource = $true) {
   if ($mutation -and -not (Test-IsAdministrator)) { throw 'Apply and Rollback require an elevated PowerShell session.' }
   Import-Module WebAdministration
   if (-not $requireSource) { return }
-  if (-not (Test-Path 'IIS:\AppPools\AGES')) { throw "Source AppPool 'AGES' was not found." }
-  $apps = @(Get-WebApplication | Where-Object Path -eq '/AGES')
-  if ($apps.Count -ne 1) { throw "Expected exactly one source application '/AGES'; found $($apps.Count)." }
-  $effectivePath = Resolve-EffectivePath ([string]$apps[0].PhysicalPath)
+  if ($BindAddress -ne '*' -and -not (Get-NetIPAddress -IPAddress $BindAddress -ErrorAction SilentlyContinue)) {
+    throw "BindAddress '$BindAddress' is not assigned to this host."
+  }
+  if (-not (Test-Path "IIS:\AppPools\$SourcePool")) { throw "Source AppPool '$SourcePool' was not found." }
+  $app = Get-WebApplication -Site $SourceSite -Name $SourceApp -ErrorAction SilentlyContinue
+  if (-not $app) { throw "Source application '$SourceSite/$SourceApp' was not found." }
+  if ([string]$app.ApplicationPool -ne $SourcePool) {
+    throw "Source application '$SourceSite/$SourceApp' uses pool '$($app.ApplicationPool)', expected '$SourcePool'."
+  }
+  $effectivePath = Resolve-EffectivePath ([string]$app.PhysicalPath)
   if (-not $effectivePath.Equals($ExpectedPath, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Source /AGES resolves to '$effectivePath', expected '$ExpectedPath'."
+    throw "Source '$SourceSite/$SourceApp' resolves to '$effectivePath', expected '$ExpectedPath'."
   }
   foreach ($target in $Targets) {
-    $otherBindings = @(Get-WebBinding | Where-Object bindingInformation -eq "*:$($target.Port):")
-    if ($otherBindings.Count -and -not (Test-Path $StatePath)) { throw "Port $($target.Port) is already owned by another IIS binding." }
+    $otherBindings = @(Get-WebBinding | Where-Object bindingInformation -like "*:$($target.Port):*")
+    $expectedBinding = "$($target.Address):$($target.Port):"
+    if ($otherBindings.Count -and (-not (Test-Path $StatePath) -or $otherBindings.Count -ne 1 -or
+        [string]$otherBindings[0].bindingInformation -ne $expectedBinding)) {
+      throw "Port $($target.Port) already has an IIS binding; requested $($target.Address):$($target.Port)."
+    }
   }
-  return [pscustomobject]@{ SourcePool = Get-Item 'IIS:\AppPools\AGES'; PhysicalPath = $effectivePath }
+  return [pscustomobject]@{ SourcePool = Get-Item "IIS:\AppPools\$SourcePool"; PhysicalPath = $effectivePath }
 }
 
 function Get-DesiredPoolFingerprint($target, $source) {
@@ -174,6 +193,13 @@ function Assert-OwnedState($ledger) {
   foreach ($entry in $ledger.resources) {
     if ($entry.status -ne 'created' -or (Get-ResourceFingerprint $entry) -ne $entry.fingerprint) {
       throw "Owned resource '$($entry.name)' no longer matches its exact fingerprint."
+    }
+    if ($entry.type -eq 'site') {
+      $target = $Targets | Where-Object Site -eq $entry.name
+      $binding = @(Get-WebBinding -Name $entry.name -Protocol http | Where-Object bindingInformation -eq "$($target.Address):$($target.Port):")
+      if ($binding.Count -ne 1 -or -not $entry.physicalPath.Equals((Resolve-EffectivePath $ExpectedPath), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Owned resource '$($entry.name)' does not match the requested path or binding."
+      }
     }
   }
 }
@@ -227,9 +253,9 @@ function Invoke-Apply {
 
       $siteEntry = [ordered]@{ type = 'site'; name = $target.Site; status = 'pending'; physicalPath = $context.PhysicalPath; fingerprint = '' }
       $ledger.resources += $siteEntry; Save-Ledger $ledger
-      New-Website -Name $target.Site -Port $target.Port -IPAddress '*' -PhysicalPath $target.Root -ApplicationPool $target.Pool | Out-Null
+      New-Website -Name $target.Site -Port $target.Port -IPAddress $target.Address -PhysicalPath $target.Root -ApplicationPool $target.Pool | Out-Null
       $createdThisRun.Add([pscustomobject]@{ type = 'site'; name = $target.Site })
-      New-WebApplication -Site $target.Site -Name 'AGES' -PhysicalPath $context.PhysicalPath -ApplicationPool $target.Pool | Out-Null
+      New-WebApplication -Site $target.Site -Name $SourceApp -PhysicalPath $context.PhysicalPath -ApplicationPool $target.Pool | Out-Null
       $siteEntry.fingerprint = Get-SiteFingerprint $target $context.PhysicalPath
       $siteEntry.status = 'created'; Save-Ledger $ledger
     }
@@ -307,7 +333,7 @@ function Invoke-Validate {
     Assert-OwnedState (Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json)
     Write-Host 'Owned AGES dual IIS resources are valid.'
   } else {
-    Write-Host "Source validated: /AGES -> $($context.PhysicalPath). Targets are not owned yet."
+    Write-Host "Source validated: $SourceSite/$SourceApp ($SourcePool) -> $($context.PhysicalPath). Targets are not owned yet."
   }
 }
 
@@ -317,10 +343,10 @@ switch ($Mode) {
   'Validate' { Invoke-Validate }
   'Plan' {
     if (-not (Test-IsAdministrator)) {
-      Write-Host 'Read-only plan (IIS state not validated without elevation): create AGES_A/AGES_A_Local:18081 and AGES_B/AGES_B_Local:18082 for C:\Sistema\AGES.'
+      Write-Host "Read-only plan (IIS state not validated without elevation): bind $BindAddress ports 18081/18082 from $SourceSite/$SourceApp ($SourcePool) at $ExpectedPath."
       break
     }
     $context = Assert-Prerequisites $false
-    Write-Host "Plan: create AGES_A/AGES_A_Local:18081 and AGES_B/AGES_B_Local:18082 for /AGES -> $($context.PhysicalPath). No changes made."
+    Write-Host "Plan: bind $BindAddress ports 18081/18082 from $SourceSite/$SourceApp ($SourcePool) -> $($context.PhysicalPath). No changes made."
   }
 }

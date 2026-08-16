@@ -5,15 +5,24 @@ const test = require("node:test");
 
 const scriptPath = require("node:path").resolve(__dirname, "../scripts/provision-ages-dual-iis.ps1");
 const source = readFileSync(scriptPath, "utf8");
+const readme = readFileSync(require("node:path").resolve(__dirname, "../README.md"), "utf8");
+const shell = process.platform === "win32" ? "powershell.exe" : "pwsh";
 
 test("IIS provisioning script parses without executing IIS mutations", (t) => {
-  const shell = process.platform === "win32" ? "powershell.exe" : "pwsh";
   const probe = spawnSync(shell, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], { encoding: "utf8" });
   if (probe.error?.code === "ENOENT") return t.skip("pwsh unavailable");
   const parsed = spawnSync(shell, ["-NoProfile", "-Command",
     "$e=$null; [Management.Automation.Language.Parser]::ParseFile($env:SCRIPT_TO_PARSE,[ref]$null,[ref]$e)|Out-Null; if($e.Count){$e|% Message;exit 1}"],
     { encoding: "utf8", env: { ...process.env, SCRIPT_TO_PARSE: scriptPath } });
   assert.equal(parsed.status, 0, parsed.stdout + parsed.stderr);
+});
+
+test("rejects unsafe binding and relative source path before execution", (t) => {
+  if (spawnSync(shell, ["-NoProfile", "-Command", "$true"]).error?.code === "ENOENT") return t.skip("PowerShell unavailable");
+  const badAddress = spawnSync(shell, ["-NoProfile", "-File", scriptPath, "-BindAddress", "all-interfaces"], { encoding: "utf8" });
+  const badPath = spawnSync(shell, ["-NoProfile", "-File", scriptPath, "-ExpectedPath", "relative"], { encoding: "utf8" });
+  assert.notEqual(badAddress.status, 0);
+  assert.notEqual(badPath.status, 0);
 });
 
 test("fails closed on unowned resources and records intent before creation", () => {
@@ -50,8 +59,15 @@ test("pins the local topology and disables synchronized periodic recycling", () 
   assert.match(source, /processModel\.maxProcesses -Value 1/);
   assert.match(source, /recycling\.disallowOverlappingRotation -Value \$false/);
   assert.match(source, /New-Website[^\r\n]+-PhysicalPath \$target\.Root/);
+  assert.match(source, /New-Website[^\r\n]+-IPAddress \$target\.Address/);
   assert.match(source, /New-WebApplication[^\r\n]+-PhysicalPath \$context\.PhysicalPath/);
   assert.doesNotMatch(source, /New-Website[^\r\n]+-PhysicalPath \$context\.PhysicalPath/);
+  assert.match(source, /Get-WebApplication -Site \$SourceSite -Name \$SourceApp/);
+  assert.match(source, /ApplicationPool -ne \$SourcePool/);
+  assert.match(source, /Get-NetIPAddress -IPAddress \$BindAddress/);
+  assert.match(source, /bindingInformation -like "\*:\$\(\$target\.Port\):\*"/);
+  assert.match(readme, /C:\\Servidor\\Solinges\\AGES.+192\.168\.89\.2/s);
+  assert.match(readme, /\/AGES\/log.+no se clona/);
 });
 
 test("rollback persists resumable progress and refuses non-exclusive ownership", () => {

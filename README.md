@@ -85,6 +85,10 @@ Si existe un ledger v1 junto al script, retirarlo primero con el provisioner v1.
 `ages-dual.env.example` contiene las URLs y nombres de pool
 que luego pueden copiarse al entorno local, sin secretos.
 
+En SRI, repetir estos parámetros para `Plan`, `Apply`, `Validate` y `Rollback`:
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\provision-ages-dual-iis.ps1 -Mode Plan -ExpectedPath 'C:\Servidor\Solinges\AGES' -BindAddress '192.168.89.2' -SourceSite 'Default Web Site' -SourceApp 'AGES' -SourcePool 'AGES'`.
+La aplicación hija `/AGES/log` no se clona porque las rutas del broker no dependen de ella.
+
 ## Enlaces del ecosistema
 
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
