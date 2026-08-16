@@ -30,6 +30,67 @@ async function waitFor(check, timeout = 250) {
   }
 }
 
+test("keeps healthy legacy slots available after a partial warmup", async () => {
+  let calls = 0;
+  await withFetch(async (url) => {
+    calls++;
+    return calls === 1 || calls >= 4 ? ready(url) : new Response("init failed", { status: 500 });
+  }, async () => {
+    const legacy = { mode: "legacy", backends: [{ id: "legacy", baseUrl: "http://legacy" }] };
+    const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "mini" }], legacy);
+
+    const summary = await pool.warmUp();
+
+    assert.equal(summary.backends[0].state, "active");
+    assert.equal(summary.ready, 1);
+    assert.equal(summary.error, 1);
+    assert.equal((await pool.proxyCall("mini", "healthy")).status, 200);
+  });
+});
+
+test("retries failed legacy slots during ping and converges the pool", async () => {
+  let calls = 0;
+  await withFetch(async (url) => {
+    calls++;
+    return calls === 1 || calls >= 4 ? ready(url) : new Response("init failed", { status: 500 });
+  }, async () => {
+    const legacy = { mode: "legacy", backends: [{ id: "legacy", baseUrl: "http://legacy" }] };
+    const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "mini" }], legacy);
+    await pool.warmUp();
+    const failedSlot = pool.slots.find((slot) => slot.status === "error");
+
+    await pool.pingSlot(failedSlot);
+
+    const summary = pool.getSummary();
+    assert.equal(calls, 4);
+    assert.equal(summary.backends[0].state, "active");
+    assert.equal(summary.ready, 2);
+    assert.equal(summary.error, 0);
+  });
+});
+
+test("keeps degraded and draining dual backends fail closed during ping", async () => {
+  const calls = { A: 0, B: 0 };
+  await withFetch(async (url) => {
+    const backend = String(url).includes("ages-a") ? "A" : "B";
+    calls[backend]++;
+    return backend === "A" ? ready(url) : new Response("init failed", { status: 500 });
+  }, async () => {
+    const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "mini" }], dual);
+    const summary = await pool.warmUp();
+    const failedSlot = pool.slots.find((slot) => slot.backendId === "B");
+    const healthySlot = pool.slots.find((slot) => slot.backendId === "A");
+
+    assert.deepEqual(summary.backends.map((backend) => backend.state), ["active", "degraded"]);
+    await pool.pingSlot(failedSlot);
+    assert.equal(calls.B, 2);
+
+    pool.backendStates.get("A").state = "draining";
+    await pool.pingSlot(healthySlot);
+    assert.equal(calls.A, 1);
+  });
+});
+
 test("serializes backend lifecycle, drains live traffic, and keeps the peer serving", async () => {
   let release;
   let recycled = false;

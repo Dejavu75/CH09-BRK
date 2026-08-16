@@ -128,7 +128,7 @@ class AgesConnectionPool {
             this.initialWarmupFinished = warmupSlots.every((slot) => slot.status === "ready");
             this.backendStates.forEach((backend, id) => {
                 const failed = warmupSlots.find((slot) => slot.backendId === id && slot.status !== "ready");
-                backend.state = failed ? "degraded" : "active";
+                backend.state = failed && this.backendConfiguration.mode === "dual" ? "degraded" : "active";
                 backend.lastError = failed === null || failed === void 0 ? void 0 : failed.lastError;
             });
             this.notifySlotWaiters("mini");
