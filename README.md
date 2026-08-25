@@ -4,6 +4,10 @@ Broker stateful entre clientes externos y AGES. Mantiene pools de sesiones AGES
 precalentadas, separa llamadas `mini` y `bigb`, agrega trazabilidad y expone
 rutas operativas para salud, pool, proxy AGES y administración controlada.
 
+El límite máximo del cuerpo HTTP se configura con `REQUEST_BODY_LIMIT`. Si no
+se define, el Broker acepta hasta `100mb` tanto para el proxy AGES como para
+las solicitudes JSON.
+
 ## Camino rápido
 
 ```bash

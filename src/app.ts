@@ -16,6 +16,8 @@ const doorMan = DoormanController.getInstance();
 const app = express();
 const certbotWebroot = process.env.CERTBOT_WEBROOT ?? "/app/certbot-www";
 const certificateRoot = process.env.CERT_PATH_CONTAINER ?? "/app/certificados";
+const configuredRequestBodyLimit = process.env.REQUEST_BODY_LIMIT?.trim();
+const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$/i.test(configuredRequestBodyLimit) ? configuredRequestBodyLimit : "100mb";
 
 app.set("trust proxy", true);
 app.use(
@@ -25,8 +27,8 @@ app.use(
     fallthrough: true
   })
 );
-app.use(["/foreign/broker/ages", "/ages"], raw({ type: "*/*" }));
-app.use(json());
+app.use(["/foreign/broker/ages", "/ages"], raw({ type: "*/*", limit: requestBodyLimit }));
+app.use(json({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
 app.use(getFullCors());
 

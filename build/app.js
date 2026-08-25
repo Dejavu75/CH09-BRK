@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a, _b;
+var _a, _b, _c;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importStar(require("express"));
 const fs_1 = require("fs");
@@ -52,13 +52,15 @@ const doorMan = se_configbase_1.DoormanController.getInstance();
 const app = (0, express_1.default)();
 const certbotWebroot = (_a = process.env.CERTBOT_WEBROOT) !== null && _a !== void 0 ? _a : "/app/certbot-www";
 const certificateRoot = (_b = process.env.CERT_PATH_CONTAINER) !== null && _b !== void 0 ? _b : "/app/certificados";
+const configuredRequestBodyLimit = (_c = process.env.REQUEST_BODY_LIMIT) === null || _c === void 0 ? void 0 : _c.trim();
+const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$/i.test(configuredRequestBodyLimit) ? configuredRequestBodyLimit : "100mb";
 app.set("trust proxy", true);
 app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroot}/.well-known/acme-challenge`, {
     dotfiles: "allow",
     fallthrough: true
 }));
-app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: "*/*" }));
-app.use((0, express_1.json)());
+app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: "*/*", limit: requestBodyLimit }));
+app.use((0, express_1.json)({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
 app.use((0, se_configbase_1.getFullCors)());
 app.use("/foreign/broker", rou_broker_1.BrokerRouter);
