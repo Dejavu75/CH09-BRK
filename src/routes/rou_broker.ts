@@ -760,7 +760,7 @@ function renderPoolPage(req: Request): string {
     </section>
     <section class="queues" id="queues">${queueCards}</section>
     <section class="grid" id="slots">${cards}</section>
-    <div class="statusline" id="statusline">Actualizado al abrir</div>
+    <div class="statusline" id="statusline">ACTUALIZADO al abrir</div>
     <details>
       <summary>JSON completo</summary>
       <pre id="json">${json}</pre>
@@ -887,7 +887,7 @@ function renderPoolPage(req: Request): string {
       queues.innerHTML = renderQueues(pool);
       slots.innerHTML = pool.slots.map(renderSlot).join("");
       json.textContent = localizeJson(pool);
-      statusLine.textContent = "Actualizado " + statusText() + " · " + buildInfoText();
+      statusLine.textContent = "ACTUALIZADO " + statusText() + " · " + buildInfoText();
     }
 
     async function refreshPool() {
