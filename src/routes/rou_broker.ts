@@ -1,4 +1,5 @@
 import { Request, Response, Router } from "express";
+import { timingSafeEqual } from "node:crypto";
 import { getHeartBeat } from "se_configbase";
 
 import { agesConnectionPool } from "../services/ages_pool";
@@ -49,8 +50,22 @@ BrokerRouter.get("/pool/show", (req, res) => {
   res.type("html").send(renderPoolPage(req));
 });
 
-BrokerRouter.post("/pool/warmup", async (_req, res) => {
-  res.json(await agesConnectionPool.warmUp());
+BrokerRouter.post("/pool/warmup", requireBrokerAdmin, async (_req, res) => {
+  try {
+    res.json(await agesConnectionPool.warmUp());
+  } catch (error) {
+    const message = formatRouteError(error);
+    res.status(/while backend|Global warmup|already recycling/i.test(message) ? 409 : 503)
+      .json({ status: "error", message });
+  }
+});
+
+BrokerRouter.post("/pool/backends/:backend/drain-recycle", requireBrokerAdmin, async (req, res) => {
+  try {
+    res.json(await agesConnectionPool.drainAndRecycleBackend(String(req.params.backend)));
+  } catch (error) {
+    res.status(409).json({ status: "error", message: formatRouteError(error) });
+  }
 });
 
 BrokerRouter.post("/pool/slots/:slot/recycle", async (req, res) => {
@@ -105,6 +120,25 @@ BrokerRouter.all("/*", async (req, res) => {
   await proxyAgesRequest("bigb", req, res, translateRestPathToAgesFunction(getWildcardPath(req)));
 });
 
+export function isBrokerAdminAuthorized(supplied: string | undefined, configured = process.env.BROKER_ADMIN_API_KEY): boolean {
+  if (!supplied || !configured || supplied.length !== configured.length) return false;
+  return timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+}
+
+function requireBrokerAdmin(req: Request, res: Response, next: () => void): void {
+  const configured = process.env.BROKER_ADMIN_API_KEY;
+  if (!configured) {
+    res.status(503).json({ status: "error", message: "Broker admin API is not configured" });
+    return;
+  }
+  const supplied = getFirstHeaderValue(req.headers["x-broker-admin-api-key"]);
+  if (!isBrokerAdminAuthorized(supplied, configured)) {
+    res.status(403).json({ status: "error", message: "Forbidden" });
+    return;
+  }
+  next();
+}
+
 async function recyclePoolSlot(req: Request, res: Response): Promise<void> {
   try {
     res.json(await agesConnectionPool.recycleSlotByReference(String(req.params.slot)));
@@ -144,6 +178,7 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       .status(result.status)
       .setHeader("X-CH09-BRK-Pool-Slot", result.slotId.toString().padStart(2, "0"))
       .setHeader("X-CH09-BRK-Pool-Kind", result.slotKind)
+      .setHeader("X-CH09-BRK-Backend", result.backendId)
       .send(result.body);
   } catch (error) {
     const sourceIp = getSourceIp(req);
@@ -710,13 +745,13 @@ function renderPoolPage(req: Request): string {
     <header>
       <div>
         <h1>CH09-BRK Pool</h1>
-        <div id="base" class="base">${escapeHtml(pool.baseUrl)}</div>
+        <div id="base" class="base">${escapeHtml(`${pool.mode}: ${pool.backends.map((backend) => `${backend.id}=${backend.baseUrl}`).join(" · ")}`)}</div>
       </div>
       <div class="actions">
         <a class="nav-button" href="${escapeHtml(timingsShowPath)}">Timings</a>
         <button id="copyJson" type="button">Copiar JSON</button>
         <form data-pool-action method="post" action="${escapeHtml(clearTimingsPath)}"><button type="submit">Limpiar métricas</button></form>
-        <form data-pool-action method="post" action="${escapeHtml(warmupPath)}"><button type="submit">Warmup</button></form>
+        <form data-pool-action data-admin-required method="post" action="${escapeHtml(warmupPath)}"><button type="submit">Warmup</button></form>
         <form data-pool-action method="post" action="${escapeHtml(restartPath)}"><button class="danger" type="submit">Restart IIS</button></form>
       </div>
     </header>
@@ -826,6 +861,7 @@ function renderPoolPage(req: Request): string {
       return '<article class="slot">' +
         '<div class="slot-head"><div class="slot-id">' + name + '</div><span class="badge ' + escapeHtml(slot.status) + '">' + escapeHtml(slot.status) + '</span></div>' +
         '<dl>' +
+          '<dt>Backend</dt><dd>' + escapeHtml(slot.backendId) + '</dd>' +
           '<dt>Kind</dt><dd>' + (slot.kind === "mini" ? "Mini" : "BigBoy") + '</dd>' +
           '<dt>Modo</dt><dd>' + (slot.dynamic ? "Adaptativo" : "Base") + '</dd>' +
           '<dt>Uso</dt><dd>' + (slot.inUse ? "En uso" : "Libre") + '</dd>' +
@@ -846,7 +882,7 @@ function renderPoolPage(req: Request): string {
 
     function renderPool(pool) {
       currentPool = pool;
-      base.textContent = pool.baseUrl;
+      base.textContent = pool.mode + ": " + pool.backends.map((backend) => backend.id + "=" + backend.baseUrl).join(" · ");
       summary.innerHTML = renderSummary(pool);
       queues.innerHTML = renderQueues(pool);
       slots.innerHTML = pool.slots.map(renderSlot).join("");
@@ -910,6 +946,15 @@ function renderPoolPage(req: Request): string {
       const form = event.target.closest("[data-pool-action]");
       if (!form) return;
       event.preventDefault();
+      const headers = { Accept: "application/json" };
+      if (form.hasAttribute("data-admin-required")) {
+        const adminKey = window.prompt("Broker admin API key");
+        if (!adminKey) {
+          statusLine.textContent = "Accion cancelada";
+          return;
+        }
+        headers["X-Broker-Admin-Api-Key"] = adminKey;
+      }
       const button = form.querySelector("button");
       const previous = button ? button.textContent : "";
       if (button) {
@@ -918,7 +963,7 @@ function renderPoolPage(req: Request): string {
       }
       statusLine.textContent = "Ejecutando accion...";
       try {
-        const response = await fetch(form.action, { method: form.method || "POST", headers: { Accept: "application/json" } });
+        const response = await fetch(form.action, { method: form.method || "POST", headers });
         if (!response.ok) throw new Error("accion status " + response.status);
         await refreshPool();
       } catch (error) {
@@ -991,6 +1036,7 @@ function renderSlotCard(basePath: string, slot: ReturnType<typeof agesConnection
       <span class="badge ${escapeHtml(slot.status)}">${escapeHtml(slot.status)}</span>
     </div>
     <dl>
+      <dt>Backend</dt><dd>${escapeHtml(slot.backendId)}</dd>
       <dt>Kind</dt><dd>${slot.kind === "mini" ? "Mini" : "BigBoy"}</dd>
       <dt>Modo</dt><dd>${slot.dynamic ? "Adaptativo" : "Base"}</dd>
       <dt>Uso</dt><dd>${slot.inUse ? "En uso" : "Libre"}</dd>

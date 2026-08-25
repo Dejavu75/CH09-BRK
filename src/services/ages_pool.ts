@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { execFile } from "child_process";
-import { readFileSync } from "fs";
+import { readFileSync, statSync } from "fs";
 import { promisify } from "util";
 
 import { log, sendDebugMail, warn } from "../utils/logger";
@@ -25,14 +25,21 @@ const ADAPTIVE_SWEEP_INTERVAL_MS = 60 * 1000;
 const ERROR_DEBUG_DETAILS = isConfigEnabled("ERROR_DEBUG_DETAILS", true);
 const AGES_SSH_HOST = process.env.AGES_SSH_HOST ?? getHostFromUrl(AGES_BASE_URL);
 const AGES_SSH_USER = process.env.AGES_SSH_USER ?? "";
-const AGES_SSH_KEY_PATH = process.env.AGES_SSH_KEY_PATH ?? "/app/keys/ch09_brk_iis";
+const AGES_SSH_KEY_PATH = process.env.AGES_SSH_KEY_PATH ?? "/run/secrets/ch09-brk-iis/ch09_brk_iis";
 const AGES_SSH_RESTART_COMMAND =
   process.env.AGES_SSH_RESTART_COMMAND ?? "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
+const AGES_SSH_COMMAND_TIMEOUT_MS = getEnvDurationSeconds("AGES_SSH_COMMAND_TIMEOUT_SECONDS", 30) * 1000;
 const execFileAsync = promisify(execFile);
 
 type AgesPoolSlotStatus = "idle" | "warming" | "starting" | "ready" | "error";
 type AgesPoolSlotKind = "bigb" | "mini";
+export type AgesBackendId = "legacy" | "A" | "B";
+export type AgesBackendState = "active" | "draining" | "recycling" | "warming" | "degraded";
+export type AgesBackendConfiguration = {
+  mode: "legacy" | "dual";
+  backends: Array<{ id: AgesBackendId; baseUrl: string }>;
+};
 type AgesPoolEndpoint = {
   kind: AgesPoolSlotKind;
   endpoint: string;
@@ -85,6 +92,7 @@ export type AgesTimingTrace = {
 
 type AgesPoolSlot = {
   id: number;
+  backendId: AgesBackendId;
   kind: AgesPoolSlotKind;
   endpoint: string;
   url: string;
@@ -100,12 +108,15 @@ type AgesPoolSlot = {
   lastResponsePreview?: string;
   lastResponseBody?: string;
   inUse: boolean;
+  maintenanceInFlight: number;
   dynamic: boolean;
   holdUntil?: number;
 };
 
 export type AgesPoolSummary = {
   baseUrl: string;
+  mode: "legacy" | "dual";
+  backends: Array<{ id: AgesBackendId; baseUrl: string; slots: number; ready: number; state: AgesBackendState; lastError?: string }>;
   size: number;
   ready: number;
   warming: number;
@@ -124,6 +135,7 @@ export type AgesPoolSummary = {
   };
   slots: Array<{
     id: number;
+    backendId: AgesBackendId;
     kind: AgesPoolSlotKind;
     status: AgesPoolSlotStatus;
     lastStatusCode?: number;
@@ -145,6 +157,7 @@ export type AgesPoolSummary = {
 export type AgesProxyResult = {
   slotId: number;
   slotKind: AgesPoolSlotKind;
+  backendId: AgesBackendId;
   agesUrl: string;
   status: number;
   headers: Record<string, string | string[]>;
@@ -156,7 +169,13 @@ export type AgesProxyResult = {
 const initialEndpoints = createInitialEndpoints();
 
 export class AgesConnectionPool {
-  private readonly slots: AgesPoolSlot[];
+  private readonly slots: AgesPoolSlot[] = [];
+  private readonly backendConfiguration: AgesBackendConfiguration;
+  private readonly backendStates = new Map<AgesBackendId, { state: AgesBackendState; lastError?: string }>();
+  private lifecycle?: { id: AgesBackendId; promise: Promise<AgesPoolSummary> };
+  private readonly drainTimeoutMs: number;
+  private readonly pollMs: number;
+  private readonly recycleExecutor: (id: AgesBackendId) => Promise<void>;
   private nextSlotId = 1;
   private nextSlotIndex = 0;
   private warmupPromise?: Promise<AgesPoolSummary>;
@@ -178,12 +197,20 @@ export class AgesConnectionPool {
 
   constructor(
     private readonly baseUrl: string = AGES_BASE_URL,
-    endpoints: AgesPoolEndpoint[] = initialEndpoints
+    endpoints: AgesPoolEndpoint[] = initialEndpoints,
+    backendConfiguration: AgesBackendConfiguration = resolveBackendConfiguration(process.env, baseUrl),
+    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void> } = {}
   ) {
-    this.slots = endpoints.map((item) => this.createSlot(item.kind, false));
+    this.backendConfiguration = backendConfiguration;
+    backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
+    this.drainTimeoutMs = options.drainTimeoutMs ?? getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
+    this.pollMs = options.pollMs ?? 250;
+    this.recycleExecutor = options.recycleExecutor ?? ((id) => this.recycleBackendAppPool(id));
+    endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
   }
 
   async warmUp(reason = "warmup requested"): Promise<AgesPoolSummary> {
+    if (this.lifecycle) throw new Error(`Cannot warm up while backend ${this.lifecycle.id} is recycling`);
     if (this.warmupPromise) {
       return this.warmupPromise;
     }
@@ -198,6 +225,15 @@ export class AgesConnectionPool {
   private async runWarmUp(options: { resetBeforeStart?: boolean; resetReason?: string } = {}): Promise<AgesPoolSummary> {
     this.initialWarmupFinished = false;
     const warmupSlots = [...this.slots];
+
+    this.backendStates.forEach((backend) => { backend.state = "draining"; });
+    try {
+      await this.waitForDrain(warmupSlots, "global warmup");
+    } catch (error) {
+      this.backendStates.forEach((backend) => { backend.state = "degraded"; backend.lastError = formatError(error); });
+      throw error;
+    }
+    this.backendStates.forEach((backend) => { backend.state = "warming"; });
 
     if (options.resetBeforeStart) {
       await this.resetPoolForWarmup(options.resetReason ?? "warmup requested");
@@ -235,16 +271,23 @@ export class AgesConnectionPool {
         continue;
       }
 
-      this.notifySlotWaiters(slot.kind);
     }
 
     this.initialWarmupFinished = warmupSlots.every((slot) => slot.status === "ready");
+    this.backendStates.forEach((backend, id) => {
+      const failed = warmupSlots.find((slot) => slot.backendId === id && slot.status !== "ready");
+      backend.state = failed && this.backendConfiguration.mode === "dual" ? "degraded" : "active";
+      backend.lastError = failed?.lastError;
+    });
+    this.notifySlotWaiters("mini");
+    this.notifySlotWaiters("bigb");
     return this.getSummary();
   }
 
   getSummary(): AgesPoolSummary {
     const slots = this.slots.map((slot) => ({
       id: slot.id,
+      backendId: slot.backendId,
       kind: slot.kind,
       status: slot.status,
       lastStatusCode: slot.lastStatusCode,
@@ -264,6 +307,13 @@ export class AgesConnectionPool {
 
     return {
       baseUrl: this.baseUrl,
+      mode: this.backendConfiguration.mode,
+      backends: this.backendConfiguration.backends.map((backend) => ({
+        ...backend,
+        slots: this.slots.filter((slot) => slot.backendId === backend.id).length,
+        ready: this.slots.filter((slot) => slot.backendId === backend.id && slot.status === "ready").length,
+        ...this.backendStates.get(backend.id)!
+      })),
       size: this.slots.length,
       ready: this.slots.filter((slot) => slot.status === "ready").length,
       warming: this.slots.filter((slot) => slot.status === "warming").length,
@@ -302,7 +352,8 @@ export class AgesConnectionPool {
 
   async request(slotId: number, endpoint: string, init: RequestInit = {}): Promise<Response> {
     const slot = this.getSlot(slotId);
-    const response = await fetch(this.resolveEndpoint(endpoint), {
+    if (!this.isBackendActive(slot)) throw new Error(`Backend ${slot.backendId} is not active`);
+    const response = await fetch(this.resolveSlotEndpoint(slot, endpoint), {
       ...init,
       headers: this.buildSessionHeaders(slot, init.headers)
     });
@@ -325,12 +376,16 @@ export class AgesConnectionPool {
 
   async recycleSlotByReference(slotReference: string): Promise<AgesPoolSummary> {
     const slot = this.getSlotByReference(slotReference);
+    if (!this.isBackendActive(slot)) throw new Error(`Backend ${slot.backendId} is not active`);
     slot.lastError = "manual recycle requested";
-    await this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "manual")));
+    await this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "manual")));
     return this.getSummary();
   }
 
   async restartAgesHostManually(): Promise<{ status: string; host: string; reason: string }> {
+    if (this.backendConfiguration.mode === "dual") {
+      return { status: "error", host: AGES_SSH_HOST, reason: "global_iis_restart_disabled_in_dual_mode" };
+    }
     const reason = "manual_iis_restart";
     const restarted = await this.restartAgesHost(reason);
 
@@ -339,6 +394,29 @@ export class AgesConnectionPool {
       host: AGES_SSH_HOST,
       reason
     };
+  }
+
+  async drainAndRecycleBackend(reference: string): Promise<AgesPoolSummary> {
+    if (this.backendConfiguration.mode !== "dual") throw new Error("Directed recycle requires dual mode");
+    const id = reference.trim().toUpperCase() as AgesBackendId;
+    const backend = this.backendStates.get(id);
+    if (!backend || id === "legacy") throw new Error(`Unknown AGES backend ${reference}`);
+    if (this.warmupPromise) throw new Error("Global warmup is running");
+    if (this.lifecycle) {
+      if (this.lifecycle.id === id) return this.lifecycle.promise;
+      throw new Error(`Backend ${this.lifecycle.id} is already recycling`);
+    }
+    const peer = this.backendConfiguration.backends.find((item) => item.id !== id)!;
+    const peerSlots = this.slots.filter((slot) => slot.backendId === peer.id);
+    const requiredKinds = new Set(this.slots.map((slot) => slot.kind));
+    if (this.backendStates.get(peer.id)?.state !== "active" ||
+        peerSlots.some((slot) => slot.status !== "ready") ||
+        [...requiredKinds].some((kind) => !peerSlots.some((slot) => slot.kind === kind && slot.status === "ready"))) {
+      throw new Error(`Peer backend ${peer.id} is not active and ready`);
+    }
+    const promise = this.runDirectedRecycle(id, backend).finally(() => { this.lifecycle = undefined; });
+    this.lifecycle = { id, promise };
+    return promise;
   }
 
   async proxyCall(
@@ -355,14 +433,13 @@ export class AgesConnectionPool {
     }
 
     const endpoint = this.buildFunctionEndpoint(kind, functionName);
-    const agesUrl = this.appendQueryString(this.resolveEndpoint(endpoint), queryString);
     const isInternalBeat = this.isInternalBeatEndpoint(kind, endpoint);
     const excludedSlotIds = new Set<number>();
     let damagedSlotRetryAttempt = 0;
 
     while (true) {
       const attemptBrokerInMs = Date.now();
-      const trace = this.createTimingTrace(kind, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, attemptBrokerInMs);
+      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
       trace.slotWaitStartAt = new Date().toISOString();
       const slot = await this.acquireSlot(kind, {
         allowGrow: !this.warmupPromise && !isInternalBeat,
@@ -370,6 +447,8 @@ export class AgesConnectionPool {
         excludeSlotIds: excludedSlotIds
       });
       const slotAcquiredMs = Date.now();
+      const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
+      trace.url = this.formatUrl(agesUrl);
       trace.slot = this.formatSlot(slot);
       trace.slotDynamic = slot.dynamic;
       trace.slotAcquiredAt = new Date(slotAcquiredMs).toISOString();
@@ -429,7 +508,11 @@ export class AgesConnectionPool {
         }
 
         if (response.status === 503) {
-          await this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
+          if (this.backendConfiguration.mode === "dual") {
+            void this.drainAndRecycleBackend(slot.backendId).catch((error) => warn(`backend recycle fail | ${formatError(error)}`));
+          } else {
+            await this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
+          }
         }
 
         const avfpInvalidObjectReason = this.getAvfpInvalidObjectReason(body);
@@ -468,7 +551,7 @@ export class AgesConnectionPool {
 
         const recycleReason = this.getRecycleReason(response.status, body);
 
-        if (recycleReason) {
+        if (recycleReason && !(this.backendConfiguration.mode === "dual" && response.status === 503)) {
           slot.lastError = recycleReason;
           await this.recycleSlot(slot, agesUrl);
         }
@@ -476,6 +559,7 @@ export class AgesConnectionPool {
         return {
           slotId: slot.id,
           slotKind: slot.kind,
+          backendId: slot.backendId,
           agesUrl,
           status: response.status,
           headers: this.responseHeadersToObject(response.headers),
@@ -506,6 +590,15 @@ export class AgesConnectionPool {
   }
 
   private async initializeSlot(slot: AgesPoolSlot): Promise<AgesPoolSlotStatus> {
+    slot.maintenanceInFlight++;
+    try {
+      return await this.initializeSlotTracked(slot);
+    } finally {
+      slot.maintenanceInFlight--;
+    }
+  }
+
+  private async initializeSlotTracked(slot: AgesPoolSlot): Promise<AgesPoolSlotStatus> {
     this.clearSlotForWarmup(slot);
     slot.status = "warming";
     slot.lastError = undefined;
@@ -568,7 +661,16 @@ export class AgesConnectionPool {
   }
 
   private async pingSlot(slot: AgesPoolSlot): Promise<void> {
-    if (slot.inUse) {
+    slot.maintenanceInFlight++;
+    try {
+      await this.pingSlotTracked(slot);
+    } finally {
+      slot.maintenanceInFlight--;
+    }
+  }
+
+  private async pingSlotTracked(slot: AgesPoolSlot): Promise<void> {
+    if (slot.inUse || !this.isBackendActive(slot)) {
       return;
     }
 
@@ -592,11 +694,11 @@ export class AgesConnectionPool {
           `st=${slot.status}`
         ].join(" | ")
       );
-      await this.recycleSlot(slot, this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping")));
+      await this.recycleSlot(slot, this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "ping")));
       return;
     }
 
-    const pingUrl = this.resolveEndpoint(this.buildFunctionEndpoint(slot.kind, "ping"));
+    const pingUrl = this.resolveSlotEndpoint(slot, this.buildFunctionEndpoint(slot.kind, "ping"));
 
     try {
       const response = await this.fetchWithTimeout(pingUrl, {
@@ -889,7 +991,7 @@ export class AgesConnectionPool {
   }
 
   private getNextReadySlot(kind: AgesPoolSlotKind): AgesPoolSlot {
-    const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && !slot.inUse);
+    const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse);
 
     if (readySlots.length === 0) {
       throw new Error(`AGES ${kind} pool has no ready slots`);
@@ -904,7 +1006,7 @@ export class AgesConnectionPool {
   private hasReadySlot(kind: AgesPoolSlotKind): boolean {
     const slots = this.slots.filter((slot) => slot.kind === kind);
 
-    return slots.some((slot) => slot.status === "ready");
+    return slots.some((slot) => slot.status === "ready" && this.isBackendActive(slot));
   }
 
   private hasAvailableAlternateSlot(kind: AgesPoolSlotKind, excludeSlotIds: Set<number>, baseOnly: boolean): boolean {
@@ -912,6 +1014,7 @@ export class AgesConnectionPool {
       (slot) =>
         slot.kind === kind &&
         slot.status === "ready" &&
+        this.isBackendActive(slot) &&
         !slot.inUse &&
         !excludeSlotIds.has(slot.id) &&
         (!baseOnly || !slot.dynamic)
@@ -949,7 +1052,7 @@ export class AgesConnectionPool {
     excludeSlotIds: Set<number> = new Set()
   ): AgesPoolSlot | undefined {
     const baseReadySlots = this.slots.filter(
-      (slot) => slot.kind === kind && slot.status === "ready" && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id)
+      (slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id)
     );
 
     if (baseReadySlots.length > 0) {
@@ -964,7 +1067,7 @@ export class AgesConnectionPool {
     }
 
     const adaptiveReadySlots = this.slots.filter(
-      (slot) => slot.kind === kind && slot.status === "ready" && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id)
+      (slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id)
     );
 
     if (adaptiveReadySlots.length === 0) {
@@ -1007,6 +1110,11 @@ export class AgesConnectionPool {
 
     if (status !== "ready") {
       warn(`pool grow fail | ${this.formatSlot(slot)} | st=${status} | err=${slot.lastError ?? "unknown"}`);
+      this.removeSlot(slot);
+      return undefined;
+    }
+
+    if (!this.isBackendActive(slot)) {
       this.removeSlot(slot);
       return undefined;
     }
@@ -1102,17 +1210,23 @@ export class AgesConnectionPool {
 
   private createSlot(kind: AgesPoolSlotKind, dynamic: boolean): AgesPoolSlot {
     const endpoint = kind === "mini" ? "/~mini~/dummy_val.ages" : "dummy_val.ages";
+    const backend = chooseLeastLoadedBackend(
+      this.backendConfiguration.backends.filter((item) => !dynamic || this.backendStates.get(item.id)?.state === "active"),
+      this.slots.map((slot) => slot.backendId)
+    );
 
     return {
       id: this.nextSlotId++,
+      backendId: backend.id,
       kind,
       endpoint,
-      url: this.resolveEndpoint(endpoint),
+      url: resolveBackendEndpoint(backend.baseUrl, endpoint),
       warmupResponse: "",
       agesToken: "",
       aspNetSessionId: "",
       status: "idle",
       inUse: false,
+      maintenanceInFlight: 0,
       dynamic,
       holdUntil: dynamic ? Date.now() + ADAPTIVE_SLOT_HOLD_MS : undefined
     };
@@ -1288,6 +1402,15 @@ export class AgesConnectionPool {
     return `${this.baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
   }
 
+  private resolveSlotEndpoint(slot: AgesPoolSlot, endpoint: string): string {
+    const backend = this.backendConfiguration.backends.find((item) => item.id === slot.backendId);
+    return resolveBackendEndpoint(backend?.baseUrl ?? this.baseUrl, endpoint);
+  }
+
+  private isBackendActive(slot: AgesPoolSlot): boolean {
+    return this.backendStates.get(slot.backendId)?.state === "active";
+  }
+
   private formatSlotId(slotId: number): string {
     return slotId.toString().padStart(2, "0");
   }
@@ -1384,6 +1507,55 @@ export class AgesConnectionPool {
     }
   }
 
+  private async runDirectedRecycle(
+    id: AgesBackendId,
+    backend: { state: AgesBackendState; lastError?: string }
+  ): Promise<AgesPoolSummary> {
+    const slots = this.slots.filter((slot) => slot.backendId === id);
+    backend.state = "draining";
+    try {
+      await this.waitForDrain(slots, `backend ${id}`);
+      backend.state = "recycling";
+      await this.recycleExecutor(id);
+      backend.state = "warming";
+      this.prepareSlotsForWarmup(slots);
+      const deadline = Date.now() + this.drainTimeoutMs;
+      while (slots.some((slot) => slot.status !== "ready") && Date.now() < deadline) {
+        for (const slot of slots.filter((item) => item.status !== "ready")) await this.initializeSlot(slot);
+        if (slots.some((slot) => slot.status !== "ready")) await delay(this.pollMs);
+      }
+      const failed = slots.find((slot) => slot.status !== "ready");
+      if (failed) throw new Error(failed.lastError ?? `backend ${id} warmup timeout`);
+      backend.state = "active";
+      backend.lastError = undefined;
+      this.notifySlotWaiters("mini");
+      this.notifySlotWaiters("bigb");
+      return this.getSummary();
+    } catch (error) {
+      backend.state = "degraded";
+      backend.lastError = formatError(error);
+      throw error;
+    }
+  }
+
+  private async waitForDrain(slots: AgesPoolSlot[], label: string): Promise<void> {
+    const deadline = Date.now() + this.drainTimeoutMs;
+    while (slots.some((slot) => slot.inUse || slot.maintenanceInFlight > 0)) {
+      if (Date.now() >= deadline) throw new Error(`${label} drain timeout`);
+      await delay(this.pollMs);
+    }
+  }
+
+  private async recycleBackendAppPool(id: AgesBackendId): Promise<void> {
+    if (!AGES_SSH_HOST || !AGES_SSH_USER) throw new Error("AGES SSH target is not configured");
+    validateSshPrivateKey(AGES_SSH_KEY_PATH);
+    const pool = resolveIisAppPoolName(id, process.env);
+    const command = `powershell -NoProfile -NonInteractive -Command "Import-Module WebAdministration; Restart-WebAppPool -Name '${pool}'"`;
+    await execFileAsync("ssh", ["-i", AGES_SSH_KEY_PATH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+      "-o", "StrictHostKeyChecking=accept-new", `${AGES_SSH_USER}@${AGES_SSH_HOST}`, command],
+    { timeout: AGES_SSH_COMMAND_TIMEOUT_MS });
+  }
+
   private async restartAgesHost(reason: string): Promise<boolean> {
     const now = Date.now();
 
@@ -1401,6 +1573,13 @@ export class AgesConnectionPool {
 
     if (!AGES_SSH_HOST || !AGES_SSH_USER) {
       warn(`ages restart skip | reason=${reason} | err=missing AGES_SSH_HOST or AGES_SSH_USER`);
+      return false;
+    }
+
+    try {
+      validateSshPrivateKey(AGES_SSH_KEY_PATH);
+    } catch (error) {
+      warn(`ages restart skip | reason=${reason} | err=${formatError(error)}`);
       return false;
     }
 
@@ -1623,6 +1802,66 @@ function isConfigEnabled(name: string, fallback = false): boolean {
 
 function shortError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function validateSshPrivateKey(path: string): void {
+  let keyStat;
+  try {
+    keyStat = statSync(path);
+  } catch {
+    throw new Error(`AGES SSH private key is unavailable at ${path}`);
+  }
+  if (!keyStat.isFile() || keyStat.size === 0) {
+    throw new Error(`AGES SSH private key is not a non-empty regular file at ${path}`);
+  }
+  if (process.platform !== "win32" && (keyStat.mode & 0o077) !== 0) {
+    throw new Error(`AGES SSH private key permissions are too open at ${path}`);
+  }
+}
+
+export function resolveBackendConfiguration(
+  env: { HAAGES_A?: string; HAAGES_B?: string },
+  legacyBaseUrl = AGES_BASE_URL
+): AgesBackendConfiguration {
+  const backendA = env.HAAGES_A?.trim() ?? "";
+  const backendB = env.HAAGES_B?.trim() ?? "";
+  if (Boolean(backendA) !== Boolean(backendB)) {
+    throw new Error("HAAGES_A and HAAGES_B must be configured together");
+  }
+  if (!backendA) {
+    return { mode: "legacy", backends: [{ id: "legacy", baseUrl: legacyBaseUrl }] };
+  }
+  for (const value of [backendA, backendB]) {
+    const parsed = new URL(value);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error(`Invalid AGES backend URL: ${value}`);
+  }
+  return { mode: "dual", backends: [{ id: "A", baseUrl: backendA }, { id: "B", baseUrl: backendB }] };
+}
+
+export function chooseLeastLoadedBackend(
+  backends: AgesBackendConfiguration["backends"],
+  assigned: AgesBackendId[]
+): AgesBackendConfiguration["backends"][number] {
+  if (backends.length === 0) throw new Error("No active AGES backend is available for adaptive growth");
+  return backends.reduce((best, candidate) =>
+    assigned.filter((id) => id === candidate.id).length < assigned.filter((id) => id === best.id).length
+      ? candidate
+      : best
+  );
+}
+
+export function resolveIisAppPoolName(id: AgesBackendId, env: NodeJS.ProcessEnv): string {
+  const value = (id === "A" ? env.AGES_IIS_APP_POOL_A : env.AGES_IIS_APP_POOL_B)?.trim() ?? "";
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(value)) throw new Error(`Invalid IIS AppPool name for backend ${id}`);
+  return value;
+}
+
+function resolveBackendEndpoint(baseUrl: string, endpoint: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 export const agesConnectionPool = new AgesConnectionPool();
