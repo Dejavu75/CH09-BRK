@@ -670,7 +670,7 @@ export class AgesConnectionPool {
   }
 
   private async pingSlotTracked(slot: AgesPoolSlot): Promise<void> {
-    if (slot.inUse || !this.isBackendActive(slot)) {
+    if (slot.inUse || !this.isBackendAvailableForMaintenance(slot)) {
       return;
     }
 
@@ -736,6 +736,7 @@ export class AgesConnectionPool {
     const recycledStatus = await this.initializeSlot(slot);
 
     if (recycledStatus === "ready") {
+      this.restoreBackendHealthIfRecovered(slot.backendId);
       log(
         [
           `recycle ok`,
@@ -991,7 +992,7 @@ export class AgesConnectionPool {
   }
 
   private getNextReadySlot(kind: AgesPoolSlotKind): AgesPoolSlot {
-    const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse);
+    const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendRoutable(slot) && !slot.inUse);
 
     if (readySlots.length === 0) {
       throw new Error(`AGES ${kind} pool has no ready slots`);
@@ -1006,7 +1007,7 @@ export class AgesConnectionPool {
   private hasReadySlot(kind: AgesPoolSlotKind): boolean {
     const slots = this.slots.filter((slot) => slot.kind === kind);
 
-    return slots.some((slot) => slot.status === "ready" && this.isBackendActive(slot));
+    return slots.some((slot) => slot.status === "ready" && this.isBackendRoutable(slot));
   }
 
   private hasAvailableAlternateSlot(kind: AgesPoolSlotKind, excludeSlotIds: Set<number>, baseOnly: boolean): boolean {
@@ -1014,7 +1015,7 @@ export class AgesConnectionPool {
       (slot) =>
         slot.kind === kind &&
         slot.status === "ready" &&
-        this.isBackendActive(slot) &&
+        this.isBackendRoutable(slot) &&
         !slot.inUse &&
         !excludeSlotIds.has(slot.id) &&
         (!baseOnly || !slot.dynamic)
@@ -1052,7 +1053,7 @@ export class AgesConnectionPool {
     excludeSlotIds: Set<number> = new Set()
   ): AgesPoolSlot | undefined {
     const baseReadySlots = this.slots.filter(
-      (slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id)
+      (slot) => slot.kind === kind && slot.status === "ready" && this.isBackendRoutable(slot) && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id)
     );
 
     if (baseReadySlots.length > 0) {
@@ -1067,7 +1068,7 @@ export class AgesConnectionPool {
     }
 
     const adaptiveReadySlots = this.slots.filter(
-      (slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id)
+      (slot) => slot.kind === kind && slot.status === "ready" && this.isBackendRoutable(slot) && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id)
     );
 
     if (adaptiveReadySlots.length === 0) {
@@ -1409,6 +1410,29 @@ export class AgesConnectionPool {
 
   private isBackendActive(slot: AgesPoolSlot): boolean {
     return this.backendStates.get(slot.backendId)?.state === "active";
+  }
+
+  private isBackendRoutable(slot: AgesPoolSlot): boolean {
+    const state = this.backendStates.get(slot.backendId)?.state;
+    return state === "active" || state === "degraded";
+  }
+
+  private isBackendAvailableForMaintenance(slot: AgesPoolSlot): boolean {
+    return this.isBackendRoutable(slot);
+  }
+
+  private restoreBackendHealthIfRecovered(id: AgesBackendId): void {
+    const backend = this.backendStates.get(id);
+    if (backend?.state !== "degraded") return;
+
+    const failed = this.slots.find((slot) => slot.backendId === id && slot.status !== "ready");
+    if (failed) {
+      backend.lastError = failed.lastError;
+      return;
+    }
+
+    backend.state = "active";
+    backend.lastError = undefined;
   }
 
   private formatSlotId(slotId: number): string {

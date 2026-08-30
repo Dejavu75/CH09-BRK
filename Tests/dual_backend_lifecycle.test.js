@@ -69,25 +69,52 @@ test("retries failed legacy slots during ping and converges the pool", async () 
   });
 });
 
-test("keeps degraded and draining dual backends fail closed during ping", async () => {
-  const calls = { A: 0, B: 0 };
+test("routes ready BigBoy slots while Mini recovery restores degraded dual backends", async () => {
+  let miniReady = false;
+  let backendRecycles = 0;
   await withFetch(async (url) => {
-    const backend = String(url).includes("ages-a") ? "A" : "B";
-    calls[backend]++;
-    return backend === "A" ? ready(url) : new Response("init failed", { status: 500 });
+    if (String(url).includes("~mini~") && !miniReady) return new Response("ERROR");
+    return ready(url);
   }, async () => {
-    const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "mini" }], dual);
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      recycleExecutor: async () => { backendRecycles++; }
+    });
     const summary = await pool.warmUp();
-    const failedSlot = pool.slots.find((slot) => slot.backendId === "B");
-    const healthySlot = pool.slots.find((slot) => slot.backendId === "A");
 
-    assert.deepEqual(summary.backends.map((backend) => backend.state), ["active", "degraded"]);
-    await pool.pingSlot(failedSlot);
-    assert.equal(calls.B, 2);
+    assert.deepEqual(summary.backends.map((backend) => backend.state), ["degraded", "degraded"]);
+    assert.equal(summary.config.mini.ready, 0);
+    assert.equal(summary.config.bigb.ready, 2);
+    assert.equal((await pool.proxyCall("bigb", "healthy")).status, 200);
+    assert.equal(backendRecycles, 0);
 
-    pool.backendStates.get("A").state = "draining";
-    await pool.pingSlot(healthySlot);
-    assert.equal(calls.A, 1);
+    await assert.rejects(pool.proxyCall("mini", "unavailable"), /still in warmup/);
+    assert.equal(backendRecycles, 0);
+
+    miniReady = true;
+    for (const slot of pool.slots.filter((item) => item.kind === "mini")) await pool.pingSlot(slot);
+
+    const recovered = pool.getSummary();
+    assert.equal(recovered.config.mini.ready, 2);
+    assert.deepEqual(recovered.backends.map((backend) => backend.state), ["active", "active"]);
+  });
+});
+
+test("keeps lifecycle backends fail closed for routing and maintenance", async () => {
+  let calls = 0;
+  await withFetch(async (url) => { calls++; return ready(url); }, async () => {
+    const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "bigb" }], dual);
+    await pool.warmUp();
+    const backendASlot = pool.slots.find((slot) => slot.backendId === "A");
+
+    for (const state of ["draining", "recycling", "warming"]) {
+      pool.backendStates.get("A").state = state;
+      backendASlot.status = "error";
+      const callsBeforeMaintenance = calls;
+      await pool.pingSlot(backendASlot);
+      assert.equal(calls, callsBeforeMaintenance);
+      await assert.rejects(pool.proxyCall(backendASlot.kind, "blocked"), /still in warmup/);
+      assert.equal(calls, callsBeforeMaintenance);
+    }
   });
 });
 

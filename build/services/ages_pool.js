@@ -487,7 +487,7 @@ class AgesConnectionPool {
     }
     pingSlotTracked(slot) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (slot.inUse || !this.isBackendActive(slot)) {
+            if (slot.inUse || !this.isBackendAvailableForMaintenance(slot)) {
                 return;
             }
             if (slot.status !== "ready") {
@@ -541,6 +541,7 @@ class AgesConnectionPool {
             slot.status = "idle";
             const recycledStatus = yield this.initializeSlot(slot);
             if (recycledStatus === "ready") {
+                this.restoreBackendHealthIfRecovered(slot.backendId);
                 (0, logger_1.log)([
                     `recycle ok`,
                     this.formatSlot(slot),
@@ -736,7 +737,7 @@ class AgesConnectionPool {
         return this.getSlot(Number.parseInt(idMatch[1], 10));
     }
     getNextReadySlot(kind) {
-        const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse);
+        const readySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendRoutable(slot) && !slot.inUse);
         if (readySlots.length === 0) {
             throw new Error(`AGES ${kind} pool has no ready slots`);
         }
@@ -746,12 +747,12 @@ class AgesConnectionPool {
     }
     hasReadySlot(kind) {
         const slots = this.slots.filter((slot) => slot.kind === kind);
-        return slots.some((slot) => slot.status === "ready" && this.isBackendActive(slot));
+        return slots.some((slot) => slot.status === "ready" && this.isBackendRoutable(slot));
     }
     hasAvailableAlternateSlot(kind, excludeSlotIds, baseOnly) {
         return this.slots.some((slot) => slot.kind === kind &&
             slot.status === "ready" &&
-            this.isBackendActive(slot) &&
+            this.isBackendRoutable(slot) &&
             !slot.inUse &&
             !excludeSlotIds.has(slot.id) &&
             (!baseOnly || !slot.dynamic));
@@ -778,7 +779,7 @@ class AgesConnectionPool {
         });
     }
     getNextAvailableSlot(kind, baseOnly, excludeSlotIds = new Set()) {
-        const baseReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id));
+        const baseReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendRoutable(slot) && !slot.inUse && !slot.dynamic && !excludeSlotIds.has(slot.id));
         if (baseReadySlots.length > 0) {
             const slot = baseReadySlots[this.nextSlotIndex % baseReadySlots.length];
             this.nextSlotIndex = (this.nextSlotIndex + 1) % baseReadySlots.length;
@@ -787,7 +788,7 @@ class AgesConnectionPool {
         if (baseOnly) {
             return undefined;
         }
-        const adaptiveReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendActive(slot) && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id));
+        const adaptiveReadySlots = this.slots.filter((slot) => slot.kind === kind && slot.status === "ready" && this.isBackendRoutable(slot) && !slot.inUse && slot.dynamic && !excludeSlotIds.has(slot.id));
         if (adaptiveReadySlots.length === 0) {
             return undefined;
         }
@@ -1062,6 +1063,26 @@ class AgesConnectionPool {
     isBackendActive(slot) {
         var _a;
         return ((_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state) === "active";
+    }
+    isBackendRoutable(slot) {
+        var _a;
+        const state = (_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state;
+        return state === "active" || state === "degraded";
+    }
+    isBackendAvailableForMaintenance(slot) {
+        return this.isBackendRoutable(slot);
+    }
+    restoreBackendHealthIfRecovered(id) {
+        const backend = this.backendStates.get(id);
+        if ((backend === null || backend === void 0 ? void 0 : backend.state) !== "degraded")
+            return;
+        const failed = this.slots.find((slot) => slot.backendId === id && slot.status !== "ready");
+        if (failed) {
+            backend.lastError = failed.lastError;
+            return;
+        }
+        backend.state = "active";
+        backend.lastError = undefined;
     }
     formatSlotId(slotId) {
         return slotId.toString().padStart(2, "0");

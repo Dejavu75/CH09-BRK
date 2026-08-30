@@ -209,7 +209,7 @@ Decisión pendiente: definir si todos los métodos aceptados por `all(...)` son 
 
 | Situación | Respuesta esperada |
 | --- | --- |
-| Pool todavía en warmup | HTTP 503, body `{ status: "warmup", message }`, header `Retry-After: 60`. |
+| Pool sin slots listos del tipo solicitado | HTTP 503, body `{ status: "warmup", message }`, header `Retry-After: 60`; al ser una respuesta generada por el broker antes del proxy, no debe disparar reciclados ni reinicios. |
 | Error broker sin respuesta AGES válida | HTTP 502, body `{ status: "error", message }`. |
 | AGES HTTP >= 500 | El broker puede marcar/reciclar el slot asociado. |
 | Error de script o `dll_init_error` | Puede gatillar reciclado y/o restart IIS según política interna. |
@@ -256,7 +256,7 @@ Orden de adquisición:
 4. Si el pool todavía está calentando, usar cualquier slot del tipo requerido que ya esté `ready`; no se debe bloquear todo el tráfico esperando que termine el warmup completo.
 5. Esperar en cola solo si no hay ningún slot compatible disponible.
 
-Regla de disponibilidad parcial: el warmup del pool es incremental. Un slot `ready` queda habilitado para tráfico inmediatamente aunque otros slots sigan en `warming` o `error`.
+Regla de disponibilidad parcial: el warmup del pool es incremental. Un slot `ready` queda habilitado para tráfico inmediatamente aunque otros slots o tipos del mismo backend sigan en `warming` o `error` y el backend figure `degraded`. Los estados de ciclo de vida `draining`, `recycling` y `warming` deben bloquear tanto routing como mantenimiento del backend.
 
 Regla de descarte por objeto AVFP inválido: si una respuesta AGES contiene el texto `OSAVFP no es un objeto`, esa respuesta indica una sesión/slot corrupto, no un resultado válido de negocio. El broker debe liberar el request del slot dañado, excluir ese slot de nuevos pedidos hasta reciclarlo, borrar su `agesToken` como mecanismo explícito para hacerlo caer, y reintentar el pedido una sola vez por cada siguiente slot libre compatible hasta obtener respuesta válida o agotar disponibilidad/timeout.
 
@@ -272,7 +272,7 @@ Riesgo: la espera de slot debe tener timeout operativo definido. Si el código n
 - Timeout de warmup por intento: 50 segundos.
 - Máximo de intentos por warmup: 2; una respuesta exacta `Warmingup` se reintenta mientras quede un intento y queda en `starting` solo al agotar ese máximo.
 - Ping monitor: cada 5 minutos.
-- El ping monitor recicla slots no listos o con ping no exitoso.
+- El ping monitor recicla slots `idle`, `starting` o `error`, incluso si su backend está `degraded`, y reactiva el backend cuando todos sus slots vuelven a estar `ready`; no interviene sobre slots en uso ni sobre backends `draining`, `recycling` o `warming`.
 - Slots dinámicos se pueden reducir luego del hold time configurado.
 - Un slot descartado por `OSAVFP no es un objeto` debe entrar al circuito normal de reciclado después de limpiar `agesToken`; el pedido original debe continuar en otro slot libre antes de responder error al cliente.
 
@@ -475,13 +475,13 @@ Una implementación nueva de CH09-BRK cumple este SSD cuando:
 - [ ] Monta atajo AGES bajo `/ages` si se mantiene compatibilidad actual.
 - [ ] Proxyea funciones AGES `mini` y `bigb` con body/headers correctos.
 - [ ] Mantiene pool inicial `mini=5` y `bigb=5`, con máximos configurables.
-- [ ] Ejecuta warmup inicial y permite usar slots `ready` aunque otros slots sigan calentando.
+- [ ] Ejecuta warmup inicial y permite usar slots `ready` aunque otros slots o tipos del mismo backend fallen y lo dejen `degraded`, sin rutear durante `draining`, `recycling` o `warming`.
 - [ ] Ejecuta warmup manual reseteando primero todos los slots existentes y luego rellenándolos incrementalmente.
 - [ ] Agrega headers `X-CH09-BRK-*` a respuestas proxy.
 - [ ] Registra timing log consultable y limpiable.
 - [ ] Recicla slots con errores AGES críticos.
 - [ ] Ante una respuesta con `OSAVFP no es un objeto`, descarta el slot, borra su `agesToken`, reintenta el mismo pedido en el próximo slot libre compatible y solo responde error si no queda slot válido disponible.
-- [ ] Ejecuta ping monitor periódico.
+- [ ] Ejecuta ping monitor periódico y recupera slots `idle`, `starting` o `error` de backends `degraded` sin bloquear su ciclo de vida.
 - [ ] Implementa restart IIS por SSH con cooldown y lock.
 - [ ] Protege rutas administrativas antes de publicación externa.
 - [ ] Sanitiza tokens/cookies/sesiones en salidas operativas.
