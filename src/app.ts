@@ -27,7 +27,7 @@ app.use(
     fallthrough: true
   })
 );
-app.use(["/foreign/broker/ages", "/ages"], raw({ type: "*/*", limit: requestBodyLimit }));
+app.use(["/foreign/broker/ages", "/ages"], raw({ type: () => true, limit: requestBodyLimit }));
 app.use(json({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
 app.use(getFullCors());

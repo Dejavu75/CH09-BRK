@@ -263,7 +263,7 @@ function normalizeIp(value) {
 function getProxyHeaders(req) {
     const headers = {};
     Object.entries(req.headers).forEach(([key, value]) => {
-        if (value === undefined) {
+        if (value === undefined || ["content-length", "transfer-encoding"].includes(key.toLowerCase())) {
             return;
         }
         headers[key] = Array.isArray(value) ? value.join(", ") : value;
@@ -271,11 +271,16 @@ function getProxyHeaders(req) {
     return headers;
 }
 function getProxyBody(req) {
+    var _a;
     if (["GET", "HEAD"].includes(req.method.toUpperCase()) || req.body === undefined) {
         return undefined;
     }
     if (Buffer.isBuffer(req.body) || typeof req.body === "string") {
         return req.body;
+    }
+    // Body parsers initialize an absent body as {}; do not invent a JSON payload.
+    if (!req.headers["transfer-encoding"] && Number((_a = req.headers["content-length"]) !== null && _a !== void 0 ? _a : 0) === 0) {
+        return undefined;
     }
     return JSON.stringify(req.body);
 }

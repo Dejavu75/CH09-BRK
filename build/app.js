@@ -59,7 +59,7 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
     dotfiles: "allow",
     fallthrough: true
 }));
-app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: "*/*", limit: requestBodyLimit }));
+app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: () => true, limit: requestBodyLimit }));
 app.use((0, express_1.json)({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
 app.use((0, se_configbase_1.getFullCors)());

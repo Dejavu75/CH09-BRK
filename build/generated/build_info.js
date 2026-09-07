@@ -5,9 +5,9 @@ exports.BROKER_BUILD_INFO = {
     "name": "CH09-BRK",
     "packageName": "se_broker",
     "packageVersion": "1.0.0",
-    "version": "1.0.0+20260731T223853Z.3ca7737ed26d.dirty",
-    "buildNumber": "20260731T223853Z",
-    "builtAt": "2026-07-31T22:38:53.136Z",
-    "gitSha": "3ca7737ed26d",
+    "version": "1.0.0+20260907T011444Z.ff5189e23a0c.dirty",
+    "buildNumber": "20260907T011444Z",
+    "builtAt": "2026-09-07T01:14:44.473Z",
+    "gitSha": "ff5189e23a0c",
     "gitDirty": true
 };

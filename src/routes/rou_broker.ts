@@ -296,7 +296,7 @@ function getProxyHeaders(req: Request): Record<string, string> {
   const headers: Record<string, string> = {};
 
   Object.entries(req.headers).forEach(([key, value]) => {
-    if (value === undefined) {
+    if (value === undefined || ["content-length", "transfer-encoding"].includes(key.toLowerCase())) {
       return;
     }
 
@@ -313,6 +313,11 @@ function getProxyBody(req: Request): BodyInit | undefined {
 
   if (Buffer.isBuffer(req.body) || typeof req.body === "string") {
     return req.body as unknown as BodyInit;
+  }
+
+  // Body parsers initialize an absent body as {}; do not invent a JSON payload.
+  if (!req.headers["transfer-encoding"] && Number(req.headers["content-length"] ?? 0) === 0) {
+    return undefined;
   }
 
   return JSON.stringify(req.body);
