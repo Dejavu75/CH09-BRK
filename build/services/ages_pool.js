@@ -124,6 +124,7 @@ class AgesConnectionPool {
                     ].join(" | "));
                     continue;
                 }
+                this.notifySlotWaiters(slot.kind);
             }
             this.initialWarmupFinished = warmupSlots.every((slot) => slot.status === "ready");
             this.backendStates.forEach((backend, id) => {
@@ -1067,10 +1068,14 @@ class AgesConnectionPool {
     isBackendRoutable(slot) {
         var _a;
         const state = (_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state;
-        return state === "active" || state === "degraded";
+        // Only global warmup admits ready sessions incrementally; directed recycle stays isolated.
+        return state === "active" || state === "degraded" ||
+            (state === "warming" && Boolean(this.warmupPromise) && slot.status === "ready");
     }
     isBackendAvailableForMaintenance(slot) {
-        return this.isBackendRoutable(slot);
+        var _a;
+        const state = (_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state;
+        return state === "active" || state === "degraded";
     }
     restoreBackendHealthIfRecovered(id) {
         const backend = this.backendStates.get(id);
