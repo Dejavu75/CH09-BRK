@@ -28,4 +28,5 @@ Keep the Broker's slot `AGES_TOKEN` off AGES login requests while preserving nor
 - Focused `node --test Tests/dual_backend_routing.test.js`: 7/7 passed.
 - `npm run tsc`: passed; `npm test`: 59/59 passed.
 - Rollback boundary: revert the login-specific header option and its focused test; unrelated pool behavior remains unchanged.
+- Work-unit commit: `3812981` (`fix(broker): omití AGES_TOKEN en login sin alterar otras llamadas`). RDD disabled by clone-local preference; delivery unmanaged by native review.
 - Pending: remote deployment and post-deploy acceptance owned by parent agent.
