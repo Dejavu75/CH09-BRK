@@ -457,7 +457,8 @@ export class AgesConnectionPool {
 
       this.logProxyCall(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource);
 
-      const requestHeaders = this.buildSessionHeaders(slot, init.headers);
+      const isLogin = endpoint.replace(/^\/+/, "").replace(/^~mini~\//i, "").toLowerCase() === "ologin.autorizar.ages";
+      const requestHeaders = this.buildSessionHeaders(slot, init.headers, { includeSessionToken: !isLogin });
       let response: Response;
       let agesStartMs = 0;
       let agesEndMs = 0;
@@ -899,13 +900,17 @@ export class AgesConnectionPool {
   private buildSessionHeaders(
     slot: AgesPoolSlot,
     headers?: HeadersInit,
-    options: { includeInternalApiKey?: boolean } = {}
+    options: { includeInternalApiKey?: boolean; includeSessionToken?: boolean } = {}
   ): Record<string, string> {
     const normalizedHeaders = this.normalizeHeaders(headers);
     const currentCookie = normalizedHeaders.Cookie ?? normalizedHeaders.cookie ?? "";
 
     delete normalizedHeaders.cookie;
-    normalizedHeaders[AGES_TOKEN_HEADER] = slot.agesToken;
+    if (options.includeSessionToken === false) {
+      delete normalizedHeaders[AGES_TOKEN_HEADER.toLowerCase()];
+    } else {
+      normalizedHeaders[AGES_TOKEN_HEADER] = slot.agesToken;
+    }
     const agesApiKey = process.env.AGES_API_KEY ?? readEnvFileValue("AGES_API_KEY");
     if (options.includeInternalApiKey && agesApiKey && !hasHeader(normalizedHeaders, AGES_API_KEY_HEADER)) {
       normalizedHeaders[AGES_API_KEY_HEADER] = agesApiKey;
