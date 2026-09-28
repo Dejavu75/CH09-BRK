@@ -14,7 +14,7 @@ The timing trace currently stores status and durations but not the request/respo
 - RDD: disabled by clone-local preference, checked before source write.
 
 ## Tasks
-- [ ] BRK-TIMING-1: Add unsanitized received header array and request body to proxied timing traces; capture JSON response text up to 1024 UTF-8 bytes without changing responses sent to clients. Add synthetic regression tests.
+- [x] BRK-TIMING-1: Add unsanitized received header array and request body to proxied timing traces; capture JSON response text up to 1024 UTF-8 bytes without changing responses sent to clients. Add synthetic regression tests.
 
 ## Acceptance and checks
 - The JSON timing endpoint includes each received request header in order, preserving original casing and duplicates, and the request body without sanitization.
@@ -24,5 +24,11 @@ The timing trace currently stores status and durations but not the request/respo
 - Commit the coherent work unit with a Conventional Commit message. RDD remains disabled/unmanaged.
 
 ## Progress
-- Pending implementation and verification.
-- Rollback boundary: remove the new trace fields and route capture, plus focused tests; no deployment in scope.
+- `req.rawHeaders` is stored as ordered name/value pairs, retaining original casing and duplicates. Parsed request body text is stored without sanitization.
+- Valid JSON responses are captured regardless of `Content-Type` and truncated on a UTF-8 character boundary at 1024 bytes. Non-JSON responses have no `responseJson` field.
+- Focused `node --test Tests/timing_payload.test.js`: 2/2 passed; full `npm test`: 61/61 passed; `npm run tsc`: passed; `git diff --cached --check`: passed.
+- Runtime harness: a synthetic local HTTP request proved ingress capture and response byte preservation; no production request, deployment, or remote verification was run.
+- Binary request bodies are represented as UTF-8 text, not reversible original bytes. The target login and JSON/text diagnostics are preserved.
+- Work-unit commit: `c585ed6` (`feat(broker): registrá encabezados y cuerpos en timings`). Authored additions plus deletions: 307, below the 400-line forecast threshold. RDD disabled by clone-local preference; delivery unmanaged by native review.
+- Rollback boundary: revert `c585ed6`; this removes the new trace fields, route capture, and focused tests without touching earlier login fixes.
+- Next step: deployment requires separate authorization; the public timing routes intentionally remain unauthenticated.
