@@ -268,7 +268,7 @@ class AgesConnectionPool {
         });
     }
     proxyCall(kind_1, functionName_1) {
-        return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "") {
+        return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "", timingRequest) {
             var _a, _b, _c, _d, _e;
             const brokerInMs = Date.now();
             if (!this.hasReadySlot(kind)) {
@@ -280,7 +280,7 @@ class AgesConnectionPool {
             let damagedSlotRetryAttempt = 0;
             while (true) {
                 const attemptBrokerInMs = Date.now();
-                const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
+                const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs, timingRequest);
                 trace.slotWaitStartAt = new Date().toISOString();
                 const slot = yield this.acquireSlot(kind, {
                     allowGrow: !this.warmupPromise && !isInternalBeat,
@@ -327,6 +327,9 @@ class AgesConnectionPool {
                     const body = Buffer.from(yield response.arrayBuffer());
                     trace.status = response.status;
                     trace.bytes = body.length;
+                    if (isJsonResponse(body)) {
+                        trace.responseJson = truncateUtf8(body, 1024);
+                    }
                     if (!isInternalBeat) {
                         this.recordSlotUse(slot, agesUrl, body);
                     }
@@ -934,17 +937,14 @@ class AgesConnectionPool {
     getSlotCount(kind) {
         return this.slots.filter((slot) => slot.kind === kind).length;
     }
-    createTimingTrace(kind, method, url, sourceIp, sourceIpSource, brokerInMs) {
-        const trace = {
-            id: this.createTraceId(),
-            entryType: "proxy",
-            kind,
-            method,
-            url: this.formatUrl(url),
-            sourceIp,
-            sourceIpSource,
-            brokerInAt: new Date(brokerInMs).toISOString()
-        };
+    createTimingTrace(kind, method, url, sourceIp, sourceIpSource, brokerInMs, timingRequest) {
+        var _a;
+        const trace = Object.assign({ id: this.createTraceId(), entryType: "proxy", kind,
+            method, url: this.formatUrl(url), sourceIp,
+            sourceIpSource, brokerInAt: new Date(brokerInMs).toISOString() }, (timingRequest && {
+            requestHeaders: (_a = timingRequest.requestHeaders) === null || _a === void 0 ? void 0 : _a.map((header) => (Object.assign({}, header))),
+            requestBody: timingRequest.requestBody
+        }));
         this.pushTimingTrace(trace);
         return trace;
     }
@@ -1358,6 +1358,27 @@ function getBodySize(body) {
         return Buffer.byteLength(body.toString());
     }
     return 0;
+}
+function isJsonResponse(body) {
+    try {
+        JSON.parse(body.toString("utf8"));
+        return true;
+    }
+    catch (_a) {
+        return false;
+    }
+}
+function truncateUtf8(body, maxBytes) {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    for (let length = Math.min(body.length, maxBytes); length >= 0; length--) {
+        try {
+            return decoder.decode(body.subarray(0, length));
+        }
+        catch (_a) {
+            // A byte limit can end inside a multibyte character.
+        }
+    }
+    return "";
 }
 function createInitialEndpoints() {
     return [

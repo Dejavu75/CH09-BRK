@@ -149,11 +149,12 @@ function proxyAgesRequest(kind, req, res, agesFunction) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             const sourceIp = getSourceIp(req);
+            const timingRequest = getTimingRequest(req);
             const result = yield ages_pool_1.agesConnectionPool.proxyCall(kind, agesFunction !== null && agesFunction !== void 0 ? agesFunction : String(req.params.agesFunction), getQueryString(req), {
                 method: req.method,
                 headers: getProxyHeaders(req),
                 body: getProxyBody(req)
-            }, sourceIp.value, sourceIp.source);
+            }, sourceIp.value, sourceIp.source, timingRequest);
             setProxyResponseHeaders(res, result.headers);
             const trace = ages_pool_1.agesConnectionPool.completeTraceResponse(result.traceId, result.status, result.body.length);
             setTraceHeaders(res, result.traceHeaders, trace);
@@ -193,6 +194,25 @@ function proxyAgesRequest(kind, req, res, agesFunction) {
             });
         }
     });
+}
+function getTimingRequest(req) {
+    var _a;
+    const requestHeaders = [];
+    for (let index = 0; index < req.rawHeaders.length; index += 2) {
+        requestHeaders.push({ name: req.rawHeaders[index], value: req.rawHeaders[index + 1] });
+    }
+    let requestBody = "";
+    if (Buffer.isBuffer(req.body)) {
+        requestBody = req.body.toString("utf8");
+    }
+    else if (typeof req.body === "string") {
+        requestBody = req.body;
+    }
+    else if (req.body !== undefined &&
+        (req.headers["transfer-encoding"] || Number((_a = req.headers["content-length"]) !== null && _a !== void 0 ? _a : 0) > 0)) {
+        requestBody = JSON.stringify(req.body);
+    }
+    return { requestHeaders, requestBody };
 }
 function translateRestPathToAgesFunction(path) {
     var _a;
