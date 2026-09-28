@@ -72,6 +72,37 @@ test("keeps tokens and cookies pinned to each slot backend", async () => withFet
   }
 ));
 
+for (const kind of ["bigb", "mini"]) {
+  test(`${kind} login forwards credentials without a slot token`, async () => {
+    const requests = [];
+    await withFetch(async (url, init = {}) => {
+      if (!String(url).includes("dummy_val")) {
+        requests.push({ url: String(url), headers: new Headers(init.headers) });
+      }
+      return ready(url);
+    }, async () => {
+      const pool = new AgesConnectionPool("http://legacy", [{ kind }], {
+        mode: "legacy", backends: [{ id: "legacy", baseUrl: "http://legacy" }]
+      });
+      await pool.warmUp();
+      const inputHeaders = {
+        AGES_USER: "test-user", AGES_PASS: "test-password",
+        AGES_TOKEN: "client-token", Accept: "application/json"
+      };
+      await pool.proxyCall(kind, "ologin.autorizar", "", { method: "POST", headers: inputHeaders });
+      const login = requests.at(-1);
+      assert.match(login.url, /ologin\.autorizar\.ages$/);
+      assert.equal(login.headers.get("AGES_USER"), "test-user");
+      assert.equal(login.headers.get("AGES_PASS"), "test-password");
+      assert.equal(login.headers.get("AGES_TOKEN"), null);
+      assert.equal(login.headers.get("Accept"), "application/json");
+
+      await pool.proxyCall(kind, "other", "", { method: "GET" });
+      assert.equal(requests.at(-1).headers.get("AGES_TOKEN"), "token-legacy");
+    });
+  });
+}
+
 test("balances adaptive growth onto the least-loaded backend", async () => {
   let release;
   await withFetch(async (url) => {
