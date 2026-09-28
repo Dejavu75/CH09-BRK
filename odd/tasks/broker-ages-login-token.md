@@ -29,4 +29,12 @@ Keep the Broker's slot `AGES_TOKEN` off AGES login requests while preserving nor
 - `npm run tsc`: passed; `npm test`: 59/59 passed.
 - Rollback boundary: revert the login-specific header option and its focused test; unrelated pool behavior remains unchanged.
 - Work-unit commit: `3812981` (`fix(broker): omití AGES_TOKEN en login sin alterar otras llamadas`). RDD disabled by clone-local preference; delivery unmanaged by native review.
-- Pending: remote deployment and post-deploy acceptance owned by parent agent.
+- Initial remote deployment was pending at the time of this local work unit; see the deployment evidence below.
+
+## Deployment evidence reported by parent agent (2026-09-28)
+
+- Guest-local backup: `/srv/solinges/backups/aries-login-proxy/20260928T170055Z`.
+- Broker image `codex-8fb8147` is running; its pool reports size 10, ready 10, warming 0, error 0 (`10/10/0/0`).
+- FD03's first image `codex-0793a60` failed startup and was rolled back; corrected image `codex-ff97508` is running healthy with valid active Nginx configuration.
+- A synthetic public login returned HTTP 401 with TLS verification result 0. No real credentials were used, and no AGES/IIS header dump was verified; the remote login-header contract is still unproven.
+- CH09 Mini beat timings still show HTTP 403. Broker pool health does not establish AGES beat authorization or BackGES recovery. The conditional PR, merge, and branch close remain pending.
