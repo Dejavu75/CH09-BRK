@@ -38,3 +38,11 @@ Keep the Broker's slot `AGES_TOKEN` off AGES login requests while preserving nor
 - FD03's first image `codex-0793a60` failed startup and was rolled back; corrected image `codex-ff97508` is running healthy with valid active Nginx configuration.
 - A synthetic public login returned HTTP 401 with TLS verification result 0. No real credentials were used, and no AGES/IIS header dump was verified; the remote login-header contract is still unproven.
 - CH09 Mini beat timings still show HTTP 403. Broker pool health does not establish AGES beat authorization or BackGES recovery. The conditional PR, merge, and branch close remain pending.
+
+## Publication and controlled redeployment reported by parent agent (2026-09-28)
+
+- Published immutable Broker tag `dhzacur/ha_ch09_brk:codex-8fb8147` to Docker Hub with digest `sha256:8e241f88323d27c39d9c078ceb73e3b6ecbb1523656cb9214aba78f6f7e8e423`, using Diego's explicitly authorized local Docker Hub session.
+- The Aries guest pulled both Broker and FD03 immutable tags; only Broker and FD03 were controlled-recreated. Running image IDs matched their pulled tags.
+- Broker pool remains size 10, ready 10, warming 0, error 0. FD03 is healthy and active `nginx -t` passes.
+- Watchtower's 17:33:30 UTC scan reported `Failed=0`, `Scanned=3`, `Updated=0`; the prior registry 404 was eliminated. Watchtower and Certbot container IDs were preserved.
+- CH09 Mini beat still returns HTTP 403. SRI SRI was unchanged; the original BackGES-down incident remains open, with no conditional PR, merge, or branch close.
