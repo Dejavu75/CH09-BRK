@@ -74,6 +74,9 @@ export type AgesTimingTrace = {
   url?: string;
   sourceIp?: string;
   sourceIpSource?: string;
+  requestHeaders?: Array<{ name: string; value: string }>;
+  requestBody?: string;
+  responseJson?: string;
   slot?: string;
   slotDynamic?: boolean;
   status?: number;
@@ -89,6 +92,8 @@ export type AgesTimingTrace = {
   agesMs?: number;
   totalMs?: number;
 };
+
+export type AgesTimingRequest = Pick<AgesTimingTrace, "requestHeaders" | "requestBody">;
 
 type AgesPoolSlot = {
   id: number;
@@ -426,7 +431,8 @@ export class AgesConnectionPool {
     queryString: string = "",
     init: RequestInit = {},
     sourceIp: string = "",
-    sourceIpSource: string = ""
+    sourceIpSource: string = "",
+    timingRequest?: AgesTimingRequest
   ): Promise<AgesProxyResult> {
     const brokerInMs = Date.now();
     if (!this.hasReadySlot(kind)) {
@@ -440,7 +446,7 @@ export class AgesConnectionPool {
 
     while (true) {
       const attemptBrokerInMs = Date.now();
-      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
+      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs, timingRequest);
       trace.slotWaitStartAt = new Date().toISOString();
       const slot = await this.acquireSlot(kind, {
         allowGrow: !this.warmupPromise && !isInternalBeat,
@@ -494,6 +500,9 @@ export class AgesConnectionPool {
         const body = Buffer.from(await response.arrayBuffer());
         trace.status = response.status;
         trace.bytes = body.length;
+        if (isJsonResponse(body)) {
+          trace.responseJson = truncateUtf8(body, 1024);
+        }
 
         if (!isInternalBeat) {
           this.recordSlotUse(slot, agesUrl, body);
@@ -1257,7 +1266,8 @@ export class AgesConnectionPool {
     url: string,
     sourceIp: string,
     sourceIpSource: string,
-    brokerInMs: number
+    brokerInMs: number,
+    timingRequest?: AgesTimingRequest
   ): AgesTimingTrace {
     const trace: AgesTimingTrace = {
       id: this.createTraceId(),
@@ -1267,7 +1277,11 @@ export class AgesConnectionPool {
       url: this.formatUrl(url),
       sourceIp,
       sourceIpSource,
-      brokerInAt: new Date(brokerInMs).toISOString()
+      brokerInAt: new Date(brokerInMs).toISOString(),
+      ...(timingRequest && {
+        requestHeaders: timingRequest.requestHeaders?.map((header) => ({ ...header })),
+        requestBody: timingRequest.requestBody
+      })
     };
 
     this.pushTimingTrace(trace);
@@ -1732,6 +1746,27 @@ function getBodySize(body: BodyInit | null | undefined): number {
   }
 
   return 0;
+}
+
+function isJsonResponse(body: Buffer): boolean {
+  try {
+    JSON.parse(body.toString("utf8"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function truncateUtf8(body: Buffer, maxBytes: number): string {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let length = Math.min(body.length, maxBytes); length >= 0; length--) {
+    try {
+      return decoder.decode(body.subarray(0, length));
+    } catch {
+      // A byte limit can end inside a multibyte character.
+    }
+  }
+  return "";
 }
 
 function createInitialEndpoints(): AgesPoolEndpoint[] {
