@@ -9,9 +9,9 @@ const dual = { mode: "dual", backends: [
 ] };
 const endpoints = [{ kind: "mini" }, { kind: "mini" }, { kind: "bigb" }, { kind: "bigb" }];
 
-function ready(url, body = "ok") {
+function ready(url, body = "ok", status = 200) {
   const host = new URL(url).hostname;
-  return new Response(body, { headers: {
+  return new Response(body, { status, headers: {
     AGES_TOKEN: `token-${host}`, "set-cookie": `ASP.NET_SessionId=session-${host}; Path=/`
   } });
 }
@@ -277,6 +277,159 @@ test("correlates dual HTTP 503 to one backend without global restart", async () 
     assert.equal(result.backendId, "A");
     await waitFor(() => recycled.length === 1);
     assert.deepEqual(recycled, ["A"]);
+  });
+});
+
+test("recycles only after two distinct same-backend slots finish recycling with HTTP 500", async () => {
+  let failA = true;
+  const recycled = [];
+  await withFetch(async (url) => failA && String(url).includes("ages-a")
+    ? new Response("failed", { status: 500 }) : ready(url), async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      pollMs: 2, drainTimeoutMs: 200, recycleExecutor: async (id) => { recycled.push(id); failA = false; }
+    });
+    failA = false;
+    await pool.warmUp();
+    failA = true;
+    const [first, second] = pool.slots.filter((slot) => slot.backendId === "A");
+    await pool.pingSlot(first);
+    await pool.pingSlot(first);
+    assert.deepEqual(recycled, []);
+    await pool.pingSlot(second);
+    await pool.pingSlot(second);
+    await waitFor(() => recycled.length === 1);
+    await waitFor(() => pool.getSummary().backends[0].state === "active");
+    assert.deepEqual(recycled, ["A"]);
+    assert.equal(pool.getSummary().backends[0].ready, 2);
+  });
+});
+
+test("does not combine backend cohorts and removes a recovered slot", async () => {
+  const failed = new Set();
+  const recycled = [];
+  await withFetch(async (url) => failed.has(new URL(url).hostname)
+    ? new Response("failed", { status: 500 }) : ready(url), async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      pollMs: 2, drainTimeoutMs: 200, recycleExecutor: async (id) => { recycled.push(id); }
+    });
+    await pool.warmUp();
+    const [a1, a2] = pool.slots.filter((slot) => slot.backendId === "A");
+    const b1 = pool.slots.find((slot) => slot.backendId === "B");
+    failed.add("ages-a");
+    await pool.pingSlot(a1);
+    failed.delete("ages-a");
+    await pool.pingSlot(a1);
+    failed.add("ages-b");
+    await pool.pingSlot(b1);
+    assert.deepEqual(recycled, []);
+    failed.delete("ages-b");
+    await pool.pingSlot(b1);
+    failed.add("ages-a");
+    await pool.pingSlot(a2);
+    await new Promise(setImmediate);
+    assert.deepEqual(recycled, []);
+  });
+});
+
+test("does not count a slot whose final recycle response is not HTTP 500", async () => {
+  let failing = false;
+  const recycled = [];
+  await withFetch(async (url) => {
+    if (!failing || String(url).includes("ages-b")) return ready(url);
+    return new Response("failed", { status: String(url).includes("~mini~") ? 503 : 500 });
+  }, async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      recycleExecutor: async (id) => { recycled.push(id); }
+    });
+    await pool.warmUp();
+    failing = true;
+    for (const slot of pool.slots.filter((item) => item.backendId === "A")) await pool.pingSlot(slot);
+    await new Promise(setImmediate);
+    assert.deepEqual(recycled, []);
+  });
+});
+
+test("removes a prior HTTP 500 when the same slot later fails with another status", async () => {
+  let miniStatus = 200;
+  let bigbStatus = 200;
+  const recycled = [];
+  await withFetch(async (url) => {
+    if (String(url).includes("ages-b")) return ready(url);
+    const status = String(url).includes("~mini~") ? miniStatus : bigbStatus;
+    return status === 200 ? ready(url) : new Response("failed", { status });
+  }, async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      recycleExecutor: async (id) => { recycled.push(id); miniStatus = 200; bigbStatus = 200; }
+    });
+    await pool.warmUp();
+    const [mini, bigb] = pool.slots.filter((slot) => slot.backendId === "A");
+    miniStatus = 500;
+    await pool.pingSlot(mini);
+    miniStatus = 503;
+    await pool.pingSlot(mini);
+    bigbStatus = 500;
+    await pool.pingSlot(bigb);
+    await new Promise(setImmediate);
+    assert.deepEqual(recycled, []);
+  });
+});
+
+test("cancels a scheduled backend recycle if its two-slot cohort shrinks before execution", async () => {
+  let failMini = false;
+  let failBigb = false;
+  const recycled = [];
+  await withFetch(async (url) => {
+    if (String(url).includes("ages-b")) return ready(url);
+    const failing = String(url).includes("~mini~") ? failMini : failBigb;
+    return failing ? new Response("failed", { status: 500 }) : ready(url);
+  }, async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      recycleExecutor: async (id) => { recycled.push(id); failBigb = false; }
+    });
+    await pool.warmUp();
+    const [mini, bigb] = pool.slots.filter((slot) => slot.backendId === "A");
+    const originalSetImmediate = global.setImmediate;
+    let scheduled;
+    try {
+      global.setImmediate = (callback) => { scheduled = callback; };
+      failMini = true;
+      failBigb = true;
+      await pool.pingSlot(mini);
+      await pool.pingSlot(bigb);
+    } finally {
+      global.setImmediate = originalSetImmediate;
+    }
+    assert.ok(scheduled);
+    failMini = false;
+    await pool.pingSlot(mini);
+    scheduled();
+    await new Promise(originalSetImmediate);
+    assert.deepEqual(recycled, []);
+  });
+});
+
+test("counts HTTP 500 with token and session headers as a failed slot recycle", async () => {
+  let failA = false;
+  const recycled = [];
+  await withFetch(async (url) => failA && String(url).includes("ages-a")
+    ? ready(url, "failed", 500) : ready(url), async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
+      pollMs: 2, drainTimeoutMs: 200,
+      recycleExecutor: async (id) => { recycled.push(id); failA = false; }
+    });
+    await pool.warmUp();
+    failA = true;
+    for (const slot of pool.slots.filter((item) => item.backendId === "A")) await pool.pingSlot(slot);
+    await waitFor(() => recycled.length === 1);
+    assert.deepEqual(recycled, ["A"]);
+  });
+});
+
+test("accepts successful 201 warmup responses with token and session headers", async () => {
+  await withFetch(async (url) => ready(url, "created", 201), async () => {
+    const pool = new AgesConnectionPool("http://legacy", endpoints, dual);
+    const summary = await pool.warmUp();
+    assert.equal(summary.ready, endpoints.length);
   });
 });
 

@@ -178,6 +178,8 @@ export class AgesConnectionPool {
   private readonly backendConfiguration: AgesBackendConfiguration;
   private readonly backendStates = new Map<AgesBackendId, { state: AgesBackendState; lastError?: string }>();
   private lifecycle?: { id: AgesBackendId; promise: Promise<AgesPoolSummary> };
+  private readonly failedSlotRecycles = new Map<AgesBackendId, Set<number>>();
+  private readonly scheduledBackendRecycles = new Set<AgesBackendId>();
   private readonly drainTimeoutMs: number;
   private readonly pollMs: number;
   private readonly recycleExecutor: (id: AgesBackendId) => Promise<void>;
@@ -615,6 +617,7 @@ export class AgesConnectionPool {
     slot.lastError = undefined;
 
     for (let attempt = 1; attempt <= WARMUP_MAX_ATTEMPTS; attempt++) {
+      slot.lastStatusCode = undefined;
       try {
         const response = await this.fetchWarmup(slot);
 
@@ -623,13 +626,17 @@ export class AgesConnectionPool {
         this.captureSessionState(slot, response);
         slot.warmupResponse = await response.text();
 
-        if (slot.agesToken && slot.aspNetSessionId) {
+        if (response.ok && slot.agesToken && slot.aspNetSessionId) {
           slot.status = "ready";
+          this.failedSlotRecycles.get(slot.backendId)?.delete(slot.id);
           this.logSlotReady(slot, attempt);
           return slot.status;
         }
 
-        if (slot.warmupResponse.trim() === AGES_WARMUP_STARTING_RESPONSE) {
+        if (!response.ok) {
+          slot.status = "error";
+          slot.lastError = `warmup returned status ${response.status}`;
+        } else if (slot.warmupResponse.trim() === AGES_WARMUP_STARTING_RESPONSE) {
           if (attempt === WARMUP_MAX_ATTEMPTS) {
             slot.status = "starting";
             return slot.status;
@@ -767,6 +774,32 @@ export class AgesConnectionPool {
         `err=${slot.lastError ?? "unknown"}`
       ].join(" | ")
     );
+
+    if (this.backendConfiguration.mode === "dual" && recycledStatus === "error" && slot.lastStatusCode === 500) {
+      const failed = this.failedSlotRecycles.get(slot.backendId) ?? new Set<number>();
+      failed.add(slot.id);
+      this.failedSlotRecycles.set(slot.backendId, failed);
+      this.scheduleBackendRecycleForFailedSlots(slot.backendId, failed.size);
+    } else {
+      this.failedSlotRecycles.get(slot.backendId)?.delete(slot.id);
+    }
+  }
+
+  private scheduleBackendRecycleForFailedSlots(id: AgesBackendId, failedCount: number): void {
+    if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle || this.warmupPromise) return;
+    this.scheduledBackendRecycles.add(id);
+    // Defer until the slot's maintenance counter has been released before the directed drain begins.
+    setImmediate(() => {
+      if ((this.failedSlotRecycles.get(id)?.size ?? 0) < 2) {
+        this.scheduledBackendRecycles.delete(id);
+        return;
+      }
+      void this.drainAndRecycleBackend(id).catch((error) => {
+        warn(`automatic backend recycle fail | backend=${id} | err=${formatError(error)}`);
+      }).finally(() => {
+        this.scheduledBackendRecycles.delete(id);
+      });
+    });
   }
 
   private async fetchWarmup(slot: AgesPoolSlot): Promise<Response> {
@@ -1563,6 +1596,7 @@ export class AgesConnectionPool {
     try {
       await this.waitForDrain(slots, `backend ${id}`);
       backend.state = "recycling";
+      this.failedSlotRecycles.delete(id);
       await this.recycleExecutor(id);
       backend.state = "warming";
       this.prepareSlotsForWarmup(slots);
