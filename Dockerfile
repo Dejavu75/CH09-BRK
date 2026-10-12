@@ -7,8 +7,11 @@ RUN apk add --no-cache git openssh-client
 # Copy only package.json and package-lock.json to leverage Docker cache
 COPY ./package.json ./package-lock.json ./
 
-# Install dependencies and clean npm cache in a single step
-RUN npm install && npm cache clean --force
+# Compile native dependencies with a temporary Alpine toolchain.
+RUN apk add --no-cache --virtual .native-build-deps python3 make g++ \
+    && npm install \
+    && apk del .native-build-deps \
+    && npm cache clean --force
 
 # Copy the build directory
 COPY ./build/ ./build/
