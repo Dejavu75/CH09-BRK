@@ -42,7 +42,7 @@ async function listen(server, t) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-test("timing input preserves received header order, case, duplicates, and complete body", async t => {
+test("proxy forwards credentials but never supplies raw request data to timings", async t => {
   let recorded;
   const responseBody = Buffer.from('{"result":"synthetic"}');
   const pool = {
@@ -88,23 +88,12 @@ test("timing input preserves received header order, case, duplicates, and comple
 
   assert.equal(result.status, 200, result.body.toString());
   assert.deepEqual(result.body, responseBody);
-  const timingRequest = recorded[6];
-  assert.deepEqual(JSON.parse(JSON.stringify(timingRequest.requestHeaders.filter(header =>
-    ["ages_user", "ages_pass", "x-ages-api-key"].includes(header.name.toLowerCase())))), [
-    { name: "AGES_USER", value: "synthetic-user" },
-    { name: "AGES_PASS", value: "synthetic-password" },
-    { name: "X-AGES-API-Key", value: "synthetic-key-a" },
-    { name: "x-ages-api-key", value: "synthetic-key-b" }
-  ]);
-  assert.equal(timingRequest.requestBody, body);
-  assert.equal(timingRequest.requestHeaders.some(header => header.name.toLowerCase() === "x-broker-service-api-key"), false);
-  assert.deepEqual(JSON.parse(JSON.stringify(timingRequest.requestHeaders.filter(header => header.name.toLowerCase() === "cookie"))),
-    [{ name: "Cookie", value: "Other=preserved" }]);
+  assert.equal(recorded.length, 6, "timing payload has no raw request argument");
   assert.equal(recorded[3].headers["x-broker-service-api-key"], undefined);
   assert.equal(recorded[3].headers.cookie, "Other=preserved");
 });
 
-test("timing output captures at most 1024 UTF-8 bytes of JSON and no non-JSON response", async () => {
+test("timing output omits request and response content and query parameters", async () => {
   const originalFetch = global.fetch;
   let responseBody = "";
   let responseType = "application/problem+json; charset=utf-8";
@@ -119,29 +108,24 @@ test("timing output captures at most 1024 UTF-8 bytes of JSON and no non-JSON re
   try {
     const pool = new AgesConnectionPool("http://synthetic/ages", [{ kind: "bigb" }]);
     await pool.warmUp();
-    const timingRequest = {
-      requestHeaders: [{ name: "AGES_PASS", value: "synthetic-password" }],
-      requestBody: '{"login":"synthetic"}'
-    };
-    responseBody = JSON.stringify({ message: "🦊".repeat(300) });
-    const jsonResult = await pool.proxyCall("bigb", "ologin.autorizar", "", { method: "POST" }, "", "", timingRequest);
+    responseBody = JSON.stringify({ message: "synthetic-secret-response" });
+    const jsonResult = await pool.proxyCall("bigb", "ologin.autorizar", "token=synthetic-secret-query", { method: "POST", body: "synthetic-secret-request" });
     const jsonTrace = pool.getTimingLog().find(trace => trace.id === jsonResult.traceId);
     assert.deepEqual(jsonResult.body, Buffer.from(responseBody));
-    assert.equal(jsonTrace.requestHeaders[0].value, "synthetic-password");
-    assert.equal(jsonTrace.requestBody, timingRequest.requestBody);
-    assert.ok(Buffer.byteLength(jsonTrace.responseJson, "utf8") <= 1024);
-    assert.ok(responseBody.startsWith(jsonTrace.responseJson));
-    assert.ok(!jsonTrace.responseJson.includes("�"));
+    assert.equal(jsonTrace.requestHeaders, undefined);
+    assert.equal(jsonTrace.requestBody, undefined);
+    assert.equal(jsonTrace.responseJson, undefined);
+    assert.ok(!JSON.stringify(jsonTrace).includes("synthetic-secret"));
 
     responseBody = '{"result":"json-with-plain-content-type"}';
     responseType = "text/plain";
-    const plainJsonResult = await pool.proxyCall("bigb", "plain-json", "", { method: "GET" }, "", "", timingRequest);
+    const plainJsonResult = await pool.proxyCall("bigb", "plain-json", "", { method: "GET" });
     const plainJsonTrace = pool.getTimingLog().find(trace => trace.id === plainJsonResult.traceId);
-    assert.equal(plainJsonTrace.responseJson, responseBody);
+    assert.equal(plainJsonTrace.responseJson, undefined);
 
     responseBody = "plain-text-response";
     responseType = "text/plain";
-    const textResult = await pool.proxyCall("bigb", "plain", "", { method: "GET" }, "", "", timingRequest);
+    const textResult = await pool.proxyCall("bigb", "plain", "", { method: "GET" });
     const textTrace = pool.getTimingLog().find(trace => trace.id === textResult.traceId);
     assert.equal(textTrace.responseJson, undefined);
     assert.equal(textResult.body.toString(), responseBody);

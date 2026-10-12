@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { getHeartBeat } from "se_configbase";
 
-import { agesConnectionPool, AgesTimingRequest } from "../services/ages_pool";
+import { agesConnectionPool } from "../services/ages_pool";
 import { configureHeartbeatExtraData } from "../services/heartbeat_metadata";
 import { warn } from "../utils/logger";
 import { BROKER_BUILD_INFO } from "../generated/build_info";
@@ -160,7 +160,6 @@ async function restartIis(res: Response): Promise<void> {
 async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Response, agesFunction?: string): Promise<void> {
   try {
     const sourceIp = getSourceIp(req);
-    const timingRequest = getTimingRequest(req);
     const result = await agesConnectionPool.proxyCall(
       kind,
       agesFunction ?? String(req.params.agesFunction),
@@ -171,8 +170,7 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
         body: getProxyBody(req)
       },
       sourceIp.value,
-      sourceIp.source,
-      timingRequest
+      sourceIp.source
     );
 
     setProxyResponseHeaders(res, result.headers);
@@ -216,28 +214,6 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       message: error instanceof Error ? error.message : String(error)
     });
   }
-}
-
-function getTimingRequest(req: Request): AgesTimingRequest {
-  const requestHeaders: NonNullable<AgesTimingRequest["requestHeaders"]> = [];
-  for (let index = 0; index < req.rawHeaders.length; index += 2) {
-    const name = req.rawHeaders[index];
-    if (name.toLowerCase() === SERVICE_KEY_HEADER) continue;
-    const value = name.toLowerCase() === "cookie" ? withoutBrokerSession(req.rawHeaders[index + 1]) : req.rawHeaders[index + 1];
-    if (value) requestHeaders.push({ name, value });
-  }
-
-  let requestBody = "";
-  if (Buffer.isBuffer(req.body)) {
-    requestBody = req.body.toString("utf8");
-  } else if (typeof req.body === "string") {
-    requestBody = req.body;
-  } else if (req.body !== undefined &&
-    (req.headers["transfer-encoding"] || Number(req.headers["content-length"] ?? 0) > 0)) {
-    requestBody = JSON.stringify(req.body);
-  }
-
-  return { requestHeaders, requestBody };
 }
 
 function translateRestPathToAgesFunction(path: string): string {
@@ -489,7 +465,7 @@ function renderTimingPage(req: Request): string {
       </table>
     </div>
     <details>
-      <summary>JSON completo</summary>
+      <summary>JSON de metadatos (sin cuerpos ni credenciales)</summary>
       <pre>${json}</pre>
     </details>
   </main>

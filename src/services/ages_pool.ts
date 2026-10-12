@@ -1,9 +1,12 @@
 import "dotenv/config";
 
 import { execFile } from "child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "fs";
+import { isIP } from "node:net";
 import { promisify } from "util";
 
+import { TimingStore } from "./timing_store";
 import { log, sendDebugMail, warn } from "../utils/logger";
 
 const AGES_BASE_URL = process.env.HAAGES ?? "http://localhost/ages";
@@ -74,9 +77,6 @@ export type AgesTimingTrace = {
   url?: string;
   sourceIp?: string;
   sourceIpSource?: string;
-  requestHeaders?: Array<{ name: string; value: string }>;
-  requestBody?: string;
-  responseJson?: string;
   slot?: string;
   slotDynamic?: boolean;
   status?: number;
@@ -92,8 +92,6 @@ export type AgesTimingTrace = {
   agesMs?: number;
   totalMs?: number;
 };
-
-export type AgesTimingRequest = Pick<AgesTimingTrace, "requestHeaders" | "requestBody">;
 
 type AgesPoolSlot = {
   id: number;
@@ -194,8 +192,8 @@ export class AgesConnectionPool {
   private lastAgesHostRestartStartedAt?: string;
   private lastAgesHostRestartFinishedAt?: string;
   private initialWarmupFinished = false;
-  private traceSequence = 0;
   private readonly timingLog: AgesTimingTrace[] = [];
+  private readonly timingStore?: TimingStore<AgesTimingTrace>;
   private readonly slotWaiters: Record<AgesPoolSlotKind, AgesSlotWaiter[]> = {
     bigb: [],
     mini: []
@@ -206,8 +204,16 @@ export class AgesConnectionPool {
     private readonly baseUrl: string = AGES_BASE_URL,
     endpoints: AgesPoolEndpoint[] = initialEndpoints,
     backendConfiguration: AgesBackendConfiguration = resolveBackendConfiguration(process.env, baseUrl),
-    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void> } = {}
+    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void>; timingStorePath?: string } = {}
   ) {
+    const timingStorePath = options.timingStorePath ?? process.env.BROKER_TIMINGS_DB_PATH;
+    if (!timingStorePath && process.env.NODE_ENV === "production") {
+      throw new Error("BROKER_TIMINGS_DB_PATH is required in production");
+    }
+    if (timingStorePath) {
+      this.timingStore = new TimingStore<AgesTimingTrace>(timingStorePath);
+      this.timingLog.push(...this.timingStore.load());
+    }
     this.backendConfiguration = backendConfiguration;
     backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
     this.drainTimeoutMs = options.drainTimeoutMs ?? getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
@@ -350,6 +356,7 @@ export class AgesConnectionPool {
 
   clearTimingLog(): { status: string; cleared: number } {
     const cleared = this.timingLog.length;
+    this.timingStore?.clear();
     this.timingLog.length = 0;
 
     return {
@@ -357,6 +364,8 @@ export class AgesConnectionPool {
       cleared
     };
   }
+
+  closeTimingStore(): void { this.timingStore?.close(); }
 
   async request(slotId: number, endpoint: string, init: RequestInit = {}): Promise<Response> {
     const slot = this.getSlot(slotId);
@@ -434,7 +443,6 @@ export class AgesConnectionPool {
     init: RequestInit = {},
     sourceIp: string = "",
     sourceIpSource: string = "",
-    timingRequest?: AgesTimingRequest
   ): Promise<AgesProxyResult> {
     const brokerInMs = Date.now();
     if (!this.hasReadySlot(kind)) {
@@ -448,7 +456,7 @@ export class AgesConnectionPool {
 
     while (true) {
       const attemptBrokerInMs = Date.now();
-      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs, timingRequest);
+      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
       trace.slotWaitStartAt = new Date().toISOString();
       const slot = await this.acquireSlot(kind, {
         allowGrow: !this.warmupPromise && !isInternalBeat,
@@ -486,7 +494,7 @@ export class AgesConnectionPool {
           agesEndMs = Date.now();
           trace.agesEndAt = new Date(agesEndMs).toISOString();
           trace.agesMs = agesStartMs ? agesEndMs - agesStartMs : undefined;
-          trace.error = formatError(error);
+          trace.error = "upstream_request_failed";
           slot.lastError = formatError(error);
           this.logProxyError(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, {
             error,
@@ -502,9 +510,6 @@ export class AgesConnectionPool {
         const body = Buffer.from(await response.arrayBuffer());
         trace.status = response.status;
         trace.bytes = body.length;
-        if (isJsonResponse(body)) {
-          trace.responseJson = truncateUtf8(body, 1024);
-        }
 
         if (!isInternalBeat) {
           this.recordSlotUse(slot, agesUrl, body);
@@ -536,7 +541,7 @@ export class AgesConnectionPool {
           slot.agesToken = "";
           slot.lastError = avfpInvalidObjectReason;
           slot.status = "error";
-          trace.error = avfpInvalidObjectReason;
+          trace.error = "upstream_invalid_object";
           this.logProxyError(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, {
             status: response.status,
             responseHeaders: this.responseHeadersToObject(response.headers),
@@ -598,6 +603,7 @@ export class AgesConnectionPool {
     trace.bytes = bytes;
     trace.brokerOutAt = new Date().toISOString();
     trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
+    this.persistTimingTrace(trace);
 
     return trace;
   }
@@ -1299,8 +1305,7 @@ export class AgesConnectionPool {
     url: string,
     sourceIp: string,
     sourceIpSource: string,
-    brokerInMs: number,
-    timingRequest?: AgesTimingRequest
+    brokerInMs: number
   ): AgesTimingTrace {
     const trace: AgesTimingTrace = {
       id: this.createTraceId(),
@@ -1308,13 +1313,9 @@ export class AgesConnectionPool {
       kind,
       method,
       url: this.formatUrl(url),
-      sourceIp,
-      sourceIpSource,
-      brokerInAt: new Date(brokerInMs).toISOString(),
-      ...(timingRequest && {
-        requestHeaders: timingRequest.requestHeaders?.map((header) => ({ ...header })),
-        requestBody: timingRequest.requestBody
-      })
+      sourceIp: isIP(sourceIp) ? sourceIp : "",
+      sourceIpSource: ["xff", "xri", "xci", "xofi", "cf", "tci", "envoy", "forwarded", "req", "socket", "broker"].includes(sourceIpSource) ? sourceIpSource : "unknown",
+      brokerInAt: new Date(brokerInMs).toISOString()
     };
 
     this.pushTimingTrace(trace);
@@ -1328,6 +1329,12 @@ export class AgesConnectionPool {
     while (this.timingLog.length > 500) {
       this.timingLog.shift();
     }
+    if (trace.entryType === "event") this.persistTimingTrace(trace);
+  }
+
+  private persistTimingTrace(trace: AgesTimingTrace): void {
+    if (!this.timingLog.includes(trace)) return;
+    this.timingStore?.upsert(trace);
   }
 
   private pushTimingEvent(message: string, errorDetail?: string): void {
@@ -1335,13 +1342,13 @@ export class AgesConnectionPool {
       id: this.createTraceId(),
       entryType: "event",
       method: "EVENT",
-      url: message,
+      url: safeEventLabel(message),
       sourceIp: "system",
       sourceIpSource: "broker",
       brokerInAt: new Date().toISOString(),
       brokerOutAt: new Date().toISOString(),
       totalMs: 0,
-      error: errorDetail
+      error: errorDetail ? "event_error" : undefined
     });
   }
 
@@ -1366,7 +1373,7 @@ export class AgesConnectionPool {
       entryType: "event",
       kind: slot.kind,
       method: "RETRY",
-      url: message,
+      url: safeEventLabel(message),
       sourceIp: "system",
       sourceIpSource: "broker",
       slot: this.formatSlot(slot),
@@ -1374,7 +1381,7 @@ export class AgesConnectionPool {
       brokerInAt: new Date().toISOString(),
       brokerOutAt: new Date().toISOString(),
       totalMs: 0,
-      error: reason
+      error: reason ? "upstream_invalid_object" : undefined
     });
   }
 
@@ -1393,6 +1400,7 @@ export class AgesConnectionPool {
     }
 
     trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
+    this.persistTimingTrace(trace);
   }
 
   private buildTraceHeaders(trace: AgesTimingTrace): Record<string, string> {
@@ -1409,9 +1417,7 @@ export class AgesConnectionPool {
   }
 
   private createTraceId(): string {
-    this.traceSequence = (this.traceSequence + 1) % 1_000_000;
-
-    return `${Date.now().toString(36)}-${this.traceSequence.toString().padStart(6, "0")}`;
+    return randomUUID();
   }
 
   private getKindSummary(kind: AgesPoolSlotKind): AgesPoolKindSummary {
@@ -1506,9 +1512,9 @@ export class AgesConnectionPool {
   private formatUrl(url: string): string {
     try {
       const parsedUrl = new URL(url);
-      return `${parsedUrl.pathname}${parsedUrl.search}`;
+      return parsedUrl.pathname;
     } catch {
-      return url.replace(this.baseUrl.replace(/\/+$/, ""), "");
+      return url.split("?", 1)[0].replace(this.baseUrl.replace(/\/+$/, ""), "");
     }
   }
 
@@ -1782,25 +1788,11 @@ function getBodySize(body: BodyInit | null | undefined): number {
   return 0;
 }
 
-function isJsonResponse(body: Buffer): boolean {
-  try {
-    JSON.parse(body.toString("utf8"));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function truncateUtf8(body: Buffer, maxBytes: number): string {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  for (let length = Math.min(body.length, maxBytes); length >= 0; length--) {
-    try {
-      return decoder.decode(body.subarray(0, length));
-    } catch {
-      // A byte limit can end inside a multibyte character.
-    }
-  }
-  return "";
+function safeEventLabel(message: string): string {
+  if (message.startsWith("damaged-slot retry")) return "damaged-slot retry";
+  if (message.startsWith("damaged-slot recycle fail")) return "damaged-slot recycle fail";
+  const restart = /^IIS restart (cooldown|start|ok|fail):/.exec(message);
+  return restart ? `IIS restart ${restart[1]}` : "system event";
 }
 
 function createInitialEndpoints(): AgesPoolEndpoint[] {
