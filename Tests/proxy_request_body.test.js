@@ -15,7 +15,12 @@ function loadSource(relativePath, dependencies) {
   }).outputText;
   const exports = {};
   vm.runInNewContext(compiled, {
-    exports, Buffer, URL, process: { env: {} },
+    exports, Buffer, URL, process: { env: {
+      BROKER_PUBLIC_ORIGIN: "https://broker.synthetic",
+      BROKER_AUTH_HTPASSWD_PATH: "/synthetic/users",
+      BROKER_AUTH_DB_PATH: "/synthetic/sessions",
+      BROKER_SERVICE_API_KEY: "synthetic-service-key-with-32-bytes"
+    } },
     require(name) {
       if (Object.hasOwn(dependencies, name)) return dependencies[name];
       if (name.startsWith(".") || name === "se_configbase") {
@@ -49,7 +54,9 @@ function createProxy(upstreamUrl) {
     "../services/ages_pool": { agesConnectionPool: pool },
     "../services/heartbeat_metadata": { configureHeartbeatExtraData() {} },
     "../utils/logger": { warn() {} },
-    "../generated/build_info": { BROKER_BUILD_INFO: {} }
+    "../generated/build_info": { BROKER_BUILD_INFO: {} },
+    "../auth/http": { SERVICE_KEY_HEADER: "x-broker-service-api-key" },
+    "../auth/session_store": { SESSION_COOKIE: "__Host-broker_session" }
   };
   const router = loadSource("routes/rou_broker.ts", dependencies);
   let app;
@@ -58,6 +65,8 @@ function createProxy(upstreamUrl) {
     "./routes/rou_broker": router,
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
+    "./auth/auth_service": { BrokerAuthService: class {} },
+    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; } },
     "./utils/logger": { log() {}, error() {}, isConfigEnabled: () => true },
     http: { createServer(value) { app = value; return { listen() {} }; } }
   });

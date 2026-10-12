@@ -5,6 +5,8 @@ import https from "https";
 import path from "path";
 import { DoormanController, getFullCors, getServingConfig, registerService } from "se_configbase";
 
+import { BrokerAuthService } from "./auth/auth_service";
+import { createAuthHttp } from "./auth/http";
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
 import { configureHeartbeatExtraData } from "./services/heartbeat_metadata";
@@ -24,9 +26,17 @@ app.use(
   "/.well-known/acme-challenge",
   express.static(`${certbotWebroot}/.well-known/acme-challenge`, {
     dotfiles: "allow",
-    fallthrough: true
+    fallthrough: false
   })
 );
+const auth = new BrokerAuthService({
+  publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
+  credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),
+  databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
+});
+const authHttp = createAuthHttp(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));
+app.use("/auth", authHttp.routes);
+app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], raw({ type: () => true, limit: requestBodyLimit }));
 app.use(json({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
@@ -168,4 +178,10 @@ function formatSslConfigLog(config: SslConfig): string {
     `SSL_CERT_PATH=${process.env.SSL_CERT_PATH ?? "(unset)"}`,
     `SSL_KEY_PATH=${process.env.SSL_KEY_PATH ?? "(unset)"}`
   ].join(" | ");
+}
+
+function requiredEnvironment(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required`);
+  return value;
 }

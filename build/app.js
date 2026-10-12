@@ -43,6 +43,8 @@ const http_1 = __importDefault(require("http"));
 const https_1 = __importDefault(require("https"));
 const path_1 = __importDefault(require("path"));
 const se_configbase_1 = require("se_configbase");
+const auth_service_1 = require("./auth/auth_service");
+const http_2 = require("./auth/http");
 const rou_broker_1 = require("./routes/rou_broker");
 const ages_pool_1 = require("./services/ages_pool");
 const heartbeat_metadata_1 = require("./services/heartbeat_metadata");
@@ -57,8 +59,16 @@ const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$
 app.set("trust proxy", true);
 app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroot}/.well-known/acme-challenge`, {
     dotfiles: "allow",
-    fallthrough: true
+    fallthrough: false
 }));
+const auth = new auth_service_1.BrokerAuthService({
+    publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
+    credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),
+    databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
+});
+const authHttp = (0, http_2.createAuthHttp)(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));
+app.use("/auth", authHttp.routes);
+app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: () => true, limit: requestBodyLimit }));
 app.use((0, express_1.json)({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
@@ -173,4 +183,11 @@ function formatSslConfigLog(config) {
         `SSL_CERT_PATH=${(_c = process.env.SSL_CERT_PATH) !== null && _c !== void 0 ? _c : "(unset)"}`,
         `SSL_KEY_PATH=${(_d = process.env.SSL_KEY_PATH) !== null && _d !== void 0 ? _d : "(unset)"}`
     ].join(" | ");
+}
+function requiredEnvironment(name) {
+    var _a;
+    const value = (_a = process.env[name]) === null || _a === void 0 ? void 0 : _a.trim();
+    if (!value)
+        throw new Error(`${name} is required`);
+    return value;
 }

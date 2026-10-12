@@ -1,0 +1,153 @@
+import { timingSafeEqual } from "node:crypto";
+import { NextFunction, Request, RequestHandler, Response, Router, json, urlencoded } from "express";
+
+import { BrokerAuthService } from "./auth_service";
+
+export const SERVICE_KEY_HEADER = "x-broker-service-api-key";
+
+function safeNext(value: unknown): string {
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") &&
+    !/[\\\r\n]/.test(value) ? value : "/foreign/broker/pool/show";
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character] || character);
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? undefined : value;
+}
+
+function sameKey(supplied: string | undefined, expected: string): boolean {
+  if (!supplied) return false;
+  const actual = Buffer.from(supplied, "utf8");
+  const wanted = Buffer.from(expected, "utf8");
+  return actual.length === wanted.length && timingSafeEqual(actual, wanted);
+}
+
+export function isMachineRoute(path: string): boolean {
+  const normalized = path.toLowerCase();
+  let route: string;
+  if (normalized === "/ages" || normalized.startsWith("/ages/")) {
+    route = normalized.slice("/ages".length).replace(/^\//, "");
+  } else if (normalized === "/foreign/broker" || normalized.startsWith("/foreign/broker/")) {
+    route = normalized.slice("/foreign/broker".length).replace(/^\//, "");
+  } else {
+    return false;
+  }
+  if (!route) return false;
+  if (isHumanControlRoute(route)) return false;
+  if (route === "health" || route === "heartbeat" || route.startsWith("heartbeat/")) return true;
+  // The Broker router's final catch-all routes proxy arbitrary AGES functions.
+  return true;
+}
+
+function isHumanControlRoute(route: string): boolean {
+  return route === "pool" || route.startsWith("pool/") || route === "ages-host" ||
+    route.startsWith("ages-host/") || route === "iis" || route.startsWith("iis/");
+}
+
+function isStateChangingGet(path: string): boolean {
+  const normalized = path.toLowerCase();
+  return ["/foreign/broker/iis/restart", "/foreign/broker/ages-host/restart-iis",
+    "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
+}
+
+export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
+  routes: Router;
+  gate: RequestHandler;
+} {
+  if (Buffer.byteLength(serviceKey, "utf8") < 32) {
+    throw new Error("BROKER_SERVICE_API_KEY must contain at least 32 bytes");
+  }
+
+  const routes = Router();
+  routes.use(json({ limit: "8kb" }), urlencoded({ extended: false, limit: "8kb" }));
+
+  routes.get("/login", (req, res) => {
+    const next = safeNext(req.query.next);
+    res.set({
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'",
+      "X-Content-Type-Options": "nosniff"
+    });
+    res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Broker login</title><style>body{font:1rem system-ui;max-width:24rem;margin:4rem auto;padding:1rem}label{display:block;margin:1rem 0}input{display:block;width:100%;box-sizing:border-box;padding:.5rem}button{padding:.6rem 1rem}</style></head><body><h1>Broker login</h1><form method="post" action="/auth/login"><input type="hidden" name="next" value="${escapeHtml(next)}"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button></form></body></html>`);
+  });
+
+  routes.post("/login", async (req, res) => {
+    const result = await auth.login({
+      username: req.body?.username,
+      password: req.body?.password,
+      // req.ip is derived from untrusted X-Forwarded-For while app.ts trusts every proxy.
+      clientKey: req.socket.remoteAddress || "unknown",
+      origin: req.get("origin")
+    });
+    res.set("Cache-Control", "no-store");
+    if (result.retryAfterSeconds) res.set("Retry-After", String(result.retryAfterSeconds));
+    if (result.setCookie) res.set("Set-Cookie", result.setCookie);
+    if (result.status !== 200) {
+      res.status(result.status).json({ error: result.status === 429 ? "Too many login attempts" : "Invalid login" });
+      return;
+    }
+    if (req.is("application/x-www-form-urlencoded")) {
+      res.redirect(303, safeNext(req.body?.next));
+      return;
+    }
+    res.json({ username: result.username, csrfToken: result.csrfToken, expiresAt: result.expiresAt });
+  });
+
+  routes.get("/session", (req, res) => {
+    const result = auth.session(req.headers.cookie);
+    res.set("Cache-Control", "no-store");
+    if (result.setCookie) res.set("Set-Cookie", result.setCookie);
+    res.status(result.status).json(result.status === 200 ?
+      { username: result.username, csrfToken: result.csrfToken, expiresAt: result.expiresAt } :
+      { error: "Unauthorized" });
+  });
+
+  routes.post("/logout", (req, res) => {
+    const result = auth.logout({
+      cookieHeader: req.headers.cookie,
+      origin: req.get("origin"),
+      csrfToken: firstHeader(req.headers["x-csrf-token"]) ?? req.body?.csrfToken
+    });
+    res.set("Cache-Control", "no-store");
+    if (result.setCookie) res.set("Set-Cookie", result.setCookie);
+    res.status(result.status).json(result.status === 200 ? { status: "ok" } : { error: "Forbidden" });
+  });
+
+  const gate = (req: Request, res: Response, next: NextFunction): void => {
+    if (isMachineRoute(req.path)) {
+      if (!sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey)) {
+        res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+        return;
+      }
+      next();
+      return;
+    }
+    const result = auth.verify({
+      cookieHeader: req.headers.cookie,
+      // Legacy GET aliases restart IIS; they must not bypass origin/CSRF checks.
+      method: ["GET", "HEAD"].includes(req.method) && isStateChangingGet(req.path) ? "POST" : req.method,
+      origin: req.get("origin"),
+      csrfToken: firstHeader(req.headers["x-csrf-token"])
+    });
+    if (result.setCookie) res.set("Set-Cookie", result.setCookie);
+    if (result.status !== 204) {
+      if (result.status === 401 && ["GET", "HEAD"].includes(req.method) &&
+          req.get("accept")?.includes("text/html") &&
+          !req.path.startsWith("/auth/")) {
+        res.redirect(303, `/auth/login?next=${encodeURIComponent(safeNext(req.originalUrl))}`);
+        return;
+      }
+      res.status(result.status).set("Cache-Control", "no-store")
+        .json({ error: result.status === 401 ? "Unauthorized" : "Forbidden" });
+      return;
+    }
+    next();
+  };
+
+  return { routes, gate };
+}

@@ -18,6 +18,8 @@ const ages_pool_1 = require("../services/ages_pool");
 const heartbeat_metadata_1 = require("../services/heartbeat_metadata");
 const logger_1 = require("../utils/logger");
 const build_info_1 = require("../generated/build_info");
+const http_1 = require("../auth/http");
+const session_store_1 = require("../auth/session_store");
 exports.BrokerRouter = (0, express_1.Router)();
 exports.BrokerRouter.get("/", (_req, res) => {
     res.send({ message: "Welcome to the broker: where messages learn to behave before crossing the border." });
@@ -199,7 +201,12 @@ function getTimingRequest(req) {
     var _a;
     const requestHeaders = [];
     for (let index = 0; index < req.rawHeaders.length; index += 2) {
-        requestHeaders.push({ name: req.rawHeaders[index], value: req.rawHeaders[index + 1] });
+        const name = req.rawHeaders[index];
+        if (name.toLowerCase() === http_1.SERVICE_KEY_HEADER)
+            continue;
+        const value = name.toLowerCase() === "cookie" ? withoutBrokerSession(req.rawHeaders[index + 1]) : req.rawHeaders[index + 1];
+        if (value)
+            requestHeaders.push({ name, value });
     }
     let requestBody = "";
     if (Buffer.isBuffer(req.body)) {
@@ -283,12 +290,25 @@ function normalizeIp(value) {
 function getProxyHeaders(req) {
     const headers = {};
     Object.entries(req.headers).forEach(([key, value]) => {
-        if (value === undefined || ["content-length", "transfer-encoding"].includes(key.toLowerCase())) {
+        if (value === undefined || ["content-length", "transfer-encoding", http_1.SERVICE_KEY_HEADER].includes(key.toLowerCase())) {
             return;
         }
-        headers[key] = Array.isArray(value) ? value.join(", ") : value;
+        const normalized = Array.isArray(value) ? value.join(", ") : value;
+        if (key.toLowerCase() === "cookie") {
+            const filtered = withoutBrokerSession(normalized);
+            if (filtered)
+                headers[key] = filtered;
+        }
+        else {
+            headers[key] = normalized;
+        }
     });
     return headers;
+}
+function withoutBrokerSession(value) {
+    return value.split(";").map(part => part.trim())
+        .filter(part => part && part.slice(0, part.indexOf("=") >= 0 ? part.indexOf("=") : part.length).trim() !== session_store_1.SESSION_COOKIE)
+        .join("; ");
 }
 function getProxyBody(req) {
     var _a;
@@ -518,6 +538,12 @@ function renderTimingPage(req) {
       renderTimings();
     }
 
+    async function csrfToken() {
+      const response = await fetch("/auth/session", { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("session status " + response.status);
+      return (await response.json()).csrfToken;
+    }
+
     function renderTimings() {
       const rows = getVisibleRows();
       tbody.innerHTML = rows.length ? rows.map(renderRow).join("") : '<tr><td colspan="17">Sin llamadas registradas.</td></tr>';
@@ -565,8 +591,13 @@ function renderTimingPage(req) {
     clearTimings.addEventListener("click", async () => {
       clearTimings.disabled = true;
       try {
-        await fetch(clearTimingsPath, { method: "POST", headers: { Accept: "application/json" } });
+        const response = await fetch(clearTimingsPath, {
+          method: "POST", headers: { Accept: "application/json", "X-CSRF-Token": await csrfToken() }
+        });
+        if (!response.ok) throw new Error("clear status " + response.status);
         await refreshTimings();
+      } catch (_error) {
+        showCopyStatus("Error al limpiar");
       } finally {
         clearTimings.disabled = false;
       }
@@ -732,6 +763,11 @@ function renderPoolPage(req) {
     const base = document.getElementById("base");
     const buildInfo = ${JSON.stringify(build_info_1.BROKER_BUILD_INFO)};
     let currentPool = null;
+    async function csrfToken() {
+      const response = await fetch("/auth/session", { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("session status " + response.status);
+      return (await response.json()).csrfToken;
+    }
     const dateFormatter = new Intl.DateTimeFormat(undefined, {
       year: "numeric",
       month: "2-digit",
@@ -917,6 +953,7 @@ function renderPoolPage(req) {
       }
       statusLine.textContent = "Ejecutando accion...";
       try {
+        headers["X-CSRF-Token"] = await csrfToken();
         const response = await fetch(form.action, { method: form.method || "POST", headers });
         if (!response.ok) throw new Error("accion status " + response.status);
         await refreshPool();

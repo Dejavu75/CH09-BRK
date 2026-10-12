@@ -467,5 +467,10 @@ test("handles warmup rejection and renders an ephemeral admin-key UI flow", asyn
   assert.match(html, /data-admin-required/);
   assert.match(html, /window\.prompt\("Broker admin API key"\)/);
   assert.match(html, /headers\["X-Broker-Admin-Api-Key"\] = adminKey/);
+  assert.match(html, /headers\["X-CSRF-Token"\] = await csrfToken\(\)/);
   assert.match(html, /if \(!adminKey\).*Accion cancelada/s);
+  const timingsRoute = BrokerRouter.stack.find((layer) => layer.route?.path === "/pool/timings/show");
+  let timingsHtml = "";
+  timingsRoute.route.stack[0].handle({ baseUrl: "" }, { type() { return this; }, send(value) { timingsHtml = value; } });
+  assert.match(timingsHtml, /"X-CSRF-Token": await csrfToken\(\)/);
 });

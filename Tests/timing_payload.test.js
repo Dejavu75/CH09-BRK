@@ -20,7 +20,9 @@ function loadBrokerRouter(pool) {
     "../services/ages_pool": { agesConnectionPool: pool },
     "../services/heartbeat_metadata": { configureHeartbeatExtraData() {} },
     "../utils/logger": { warn() {} },
-    "../generated/build_info": { BROKER_BUILD_INFO: {} }
+    "../generated/build_info": { BROKER_BUILD_INFO: {} },
+    "../auth/http": { SERVICE_KEY_HEADER: "x-broker-service-api-key" },
+    "../auth/session_store": { SESSION_COOKIE: "__Host-broker_session" }
   };
   const exports = {};
   vm.runInNewContext(compiled, {
@@ -68,6 +70,8 @@ test("timing input preserves received header order, case, duplicates, and comple
         "AGES_PASS: synthetic-password",
         "X-AGES-API-Key: synthetic-key-a",
         "x-ages-api-key: synthetic-key-b",
+        "X-Broker-Service-Api-Key: synthetic-service-key",
+        "Cookie: __Host-broker_session=synthetic-session; Other=preserved",
         "Content-Type: application/json",
         `Content-Length: ${Buffer.byteLength(body)}`,
         "Connection: close", "", body
@@ -93,6 +97,11 @@ test("timing input preserves received header order, case, duplicates, and comple
     { name: "x-ages-api-key", value: "synthetic-key-b" }
   ]);
   assert.equal(timingRequest.requestBody, body);
+  assert.equal(timingRequest.requestHeaders.some(header => header.name.toLowerCase() === "x-broker-service-api-key"), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(timingRequest.requestHeaders.filter(header => header.name.toLowerCase() === "cookie"))),
+    [{ name: "Cookie", value: "Other=preserved" }]);
+  assert.equal(recorded[3].headers["x-broker-service-api-key"], undefined);
+  assert.equal(recorded[3].headers.cookie, "Other=preserved");
 });
 
 test("timing output captures at most 1024 UTF-8 bytes of JSON and no non-JSON response", async () => {
