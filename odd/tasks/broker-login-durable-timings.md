@@ -126,17 +126,24 @@ requested that this arbitrary retention cap be removed.
   toward `main` is authorized using saved GitHub credentials after reviews
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
-  are open, and have no labels; protected `status:approved` was not inferred.
-  The branch-pr approved-issue gate remains open. Running authored committed
+  remain open, and have confirmed `status:approved` labels. Running authored committed
   count: 1,982 (T1 391, T2 375, T3 317, T4 283, T5 309, T6 253, T7 54;
   generated `build` excluded). Proposed first
-  review slice ends at T1; dependent slices require branch/PR preparation.
+  review slice ends at T1. The local, unpublished chain has tracker branch
+  `feat/broker-login-durable-timings` from `origin/main` and seven cumulative
+  child branches, each with one focused work-unit commit. The tracker contains
+  this ODD document; child diffs exclude its repeated progress edits. Slices:
+  T1 `aaa903b` (391 authored lines), T2 `afd7d24` (375), T3 `bccbca0`
+  (317), T4 `0586d13` (283), T5 `f582d0a` (309), T6 `8727efd`
+  (217), T7 `a7d0ce0` (54). Each child targets its immediate predecessor;
+  the first targets the tracker, which will be a draft PR to `main`. Generated
+  `build/` files raise visible diff totals above 400 for T1/T2/T3/T5 but
+  are excluded from authored budget. No size-only code reduction was made.
 - Progress: T1-T7 committed and locally checked. Two independent read-only
   reviews found a session-revocation bug, secret-bearing ordinary pool/route
   logs, and a live-timing regression. A local production dependency audit found the
-  critical `proxy-addr` advisory, now patched. Next: explicit issue-label
-  authority for #6/#7, then the approved issue gate and
-  feature-branch-chain PR preparation.
+  critical `proxy-addr` advisory, now patched. Next: push the prepared
+  feature-branch-chain, create linked and labeled PRs, and verify CI.
   Unlimited on-disk history
   requires operator disk monitoring and backup; clearing remains manual.
   Activation still requires verifying the actual BackGES htpasswd host path,
