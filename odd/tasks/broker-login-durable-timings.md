@@ -127,23 +127,28 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 1,982 (T1 391, T2 375, T3 317, T4 283, T5 309, T6 253, T7 54;
-  generated `build` excluded). Proposed first
-  review slice ends at T1. The local, unpublished chain has tracker branch
-  `feat/broker-login-durable-timings` from `origin/main` and seven cumulative
+  count: 1,950 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54;
+  generated `build` excluded). The published chain has draft tracker PR #8
+  (`feat/broker-login-durable-timings`) against `main` and seven cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
-  T1 `aaa903b` (391 authored lines), T2 `afd7d24` (375), T3 `bccbca0`
-  (317), T4 `0586d13` (283), T5 `f582d0a` (309), T6 `8727efd`
-  (217), T7 `a7d0ce0` (54). Each child targets its immediate predecessor;
-  the first targets the tracker, which will be a draft PR to `main`. Generated
+  T1 PR #9 `907e60e` (398 authored lines), T2 PR #10 `6c1a20a` (375),
+  T3 PR #11 `00bbb35` (317), T4 PR #12 `78b121c` (280),
+  T5 PR #13 `a1ca563` (309), T6 PR #14 `5fcfa81` (217),
+  T7 PR #15 `64f31d9` (54). Each child targets its immediate predecessor;
+  the first targets the draft tracker. Generated
   `build/` files raise visible diff totals above 400 for T1/T2/T3/T5 but
   are excluded from authored budget. No size-only code reduction was made.
+  Each PR links an approved issue and has exactly one matching `type:*` label.
+  All eight GitHub CI checks passed after moving the native dependency build
+  toolchain into T1; the resulting Dockerfile is unchanged at the final tip.
 - Progress: T1-T7 committed and locally checked. Two independent read-only
   reviews found a session-revocation bug, secret-bearing ordinary pool/route
   logs, and a live-timing regression. A local production dependency audit found the
-  critical `proxy-addr` advisory, now patched. Next: push the prepared
-  feature-branch-chain, create linked and labeled PRs, and verify CI.
+  critical `proxy-addr` advisory, now patched. The feature-branch-chain is
+  pushed and linked PRs #8-#15 are open; the tracker remains draft. Next:
+  human review and integration in dependency order; do not merge the tracker
+  first.
   Unlimited on-disk history
   requires operator disk monitoring and backup; clearing remains manual.
   Activation still requires verifying the actual BackGES htpasswd host path,
