@@ -74,6 +74,12 @@ de 30 días: es una decisión más restrictiva que los 365 días observados en
 el runtime actual de BackGES. La identidad de usuarios se comparte, no la
 sesión: esto **no es SSO**. La vista de timings ahora omite cuerpos,
 parámetros de URL y headers no aprobados antes de mostrar o persistir datos.
+El historial de timings no elimina registros por cantidad: queda en SQLite
+hasta que un operador use **Limpiar**. `GET /foreign/broker/pool/timings`
+devuelve `{ rows, nextCursor }` en páginas de 100 registros ordenados del más
+reciente al más antiguo; continuar con `?cursor=<nextCursor>`. La vista sólo
+muestra una página a la vez. Se debe monitorear espacio en disco y conservar
+backups del volumen persistente según la política operativa.
 
 El login limita intentos por IP cliente. Sin configuración adicional se usa
 la IP del socket directo y se ignoran los headers de reenvío. Si hay un proxy

@@ -61,7 +61,7 @@ class AgesConnectionPool {
         this.agesHostRestartRunning = false;
         this.agesHostRestartCooldownUntil = 0;
         this.initialWarmupFinished = false;
-        this.timingLog = [];
+        this.liveTimings = new Map();
         this.slotWaiters = {
             bigb: [],
             mini: []
@@ -71,10 +71,7 @@ class AgesConnectionPool {
         if (!timingStorePath && process.env.NODE_ENV === "production") {
             throw new Error("BROKER_TIMINGS_DB_PATH is required in production");
         }
-        if (timingStorePath) {
-            this.timingStore = new timing_store_1.TimingStore(timingStorePath);
-            this.timingLog.push(...this.timingStore.load());
-        }
+        this.timingStore = new timing_store_1.TimingStore(timingStorePath);
         this.backendConfiguration = backendConfiguration;
         backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
         this.drainTimeoutMs = (_b = options.drainTimeoutMs) !== null && _b !== void 0 ? _b : getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
@@ -194,20 +191,18 @@ class AgesConnectionPool {
             slots
         };
     }
-    getTimingLog() {
-        return [...this.timingLog].reverse();
+    getTimingLog(cursor) {
+        return this.timingStore.page(cursor);
     }
     clearTimingLog() {
-        var _a;
-        const cleared = this.timingLog.length;
-        (_a = this.timingStore) === null || _a === void 0 ? void 0 : _a.clear();
-        this.timingLog.length = 0;
+        const cleared = this.timingStore.clear();
+        this.liveTimings.clear();
         return {
             status: "ok",
             cleared
         };
     }
-    closeTimingStore() { var _a; (_a = this.timingStore) === null || _a === void 0 ? void 0 : _a.close(); }
+    closeTimingStore() { this.timingStore.close(); }
     request(slotId_1, endpoint_1) {
         return __awaiter(this, arguments, void 0, function* (slotId, endpoint, init = {}) {
             const slot = this.getSlot(slotId);
@@ -297,11 +292,19 @@ class AgesConnectionPool {
                 const attemptBrokerInMs = Date.now();
                 const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
                 trace.slotWaitStartAt = new Date().toISOString();
-                const slot = yield this.acquireSlot(kind, {
-                    allowGrow: !this.warmupPromise && !isInternalBeat,
-                    baseOnly: isInternalBeat,
-                    excludeSlotIds: excludedSlotIds
-                });
+                let slot;
+                try {
+                    slot = yield this.acquireSlot(kind, {
+                        allowGrow: !this.warmupPromise && !isInternalBeat,
+                        baseOnly: isInternalBeat,
+                        excludeSlotIds: excludedSlotIds
+                    });
+                }
+                catch (error) {
+                    trace.error = "slot_acquisition_failed";
+                    this.completeTimingTrace(trace);
+                    throw error;
+                }
                 const slotAcquiredMs = Date.now();
                 const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
                 trace.url = this.formatUrl(agesUrl);
@@ -411,7 +414,7 @@ class AgesConnectionPool {
         });
     }
     completeTraceResponse(traceId, status, bytes) {
-        const trace = this.timingLog.find((item) => item.id === traceId);
+        const trace = this.timingStore.get(traceId);
         if (!trace) {
             return undefined;
         }
@@ -419,7 +422,7 @@ class AgesConnectionPool {
         trace.bytes = bytes;
         trace.brokerOutAt = new Date().toISOString();
         trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
-        this.persistTimingTrace(trace);
+        this.timingStore.upsert(trace);
         return trace;
     }
     initializeSlot(slot) {
@@ -999,18 +1002,10 @@ class AgesConnectionPool {
         return trace;
     }
     pushTimingTrace(trace) {
-        this.timingLog.push(trace);
-        while (this.timingLog.length > 500) {
-            this.timingLog.shift();
-        }
         if (trace.entryType === "event")
-            this.persistTimingTrace(trace);
-    }
-    persistTimingTrace(trace) {
-        var _a;
-        if (!this.timingLog.includes(trace))
-            return;
-        (_a = this.timingStore) === null || _a === void 0 ? void 0 : _a.upsert(trace);
+            this.timingStore.upsert(trace);
+        else
+            this.liveTimings.set(trace.id, trace);
     }
     pushTimingEvent(message, errorDetail) {
         this.pushTimingTrace({
@@ -1064,11 +1059,13 @@ class AgesConnectionPool {
         });
     }
     completeTimingTrace(trace) {
+        if (!this.liveTimings.delete(trace.id))
+            return;
         if (!trace.brokerOutAt) {
             trace.brokerOutAt = new Date().toISOString();
         }
         trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
-        this.persistTimingTrace(trace);
+        this.timingStore.upsert(trace);
     }
     buildTraceHeaders(trace) {
         var _a, _b, _c, _d, _e, _f;

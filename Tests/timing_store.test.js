@@ -13,22 +13,35 @@ function fixture(t) {
   return path.join(directory, "private", "timings.sqlite");
 }
 
-test("timing store upserts a trace, caps 500 records, and clears durably", t => {
+test("timing store retains records beyond 500 and pages stably across restart", t => {
   const file = fixture(t);
   const store = new TimingStore(file);
   for (let index = 0; index < 502; index++) store.upsert({ id: `trace-${index}`, index });
   store.upsert({ id: "trace-501", index: 900 });
-  assert.equal(store.load().length, 500);
-  assert.equal(store.load()[0].id, "trace-2");
-  assert.equal(store.load().at(-1).index, 900);
+  const firstPage = store.page();
+  assert.equal(firstPage.rows.length, 100);
+  assert.equal(firstPage.rows[0].index, 900);
+  assert.equal(firstPage.rows.at(-1).id, "trace-402");
+  store.upsert({ id: "new-trace" });
+  const secondPage = store.page(firstPage.nextCursor);
+  assert.equal(secondPage.rows[0].id, "trace-401");
+  const ids = [...firstPage.rows, ...secondPage.rows];
+  let cursor = secondPage.nextCursor;
+  while (cursor !== undefined) {
+    const page = store.page(cursor);
+    ids.push(...page.rows);
+    cursor = page.nextCursor;
+  }
+  assert.equal(ids.length, 502);
+  assert.equal(ids.at(-1).id, "trace-0");
   store.close();
 
   const reopened = new TimingStore(file);
-  assert.equal(reopened.load().length, 500);
-  assert.equal(reopened.clear(), 500);
+  assert.equal(reopened.page().rows[0].id, "new-trace");
+  assert.equal(reopened.clear(), 503);
   reopened.close();
   const afterClear = new TimingStore(file);
-  assert.deepEqual(afterClear.load(), []);
+  assert.deepEqual(afterClear.page(), { rows: [] });
   afterClear.close();
 });
 
@@ -45,14 +58,14 @@ test("finalized proxy timing survives recreation without request, response, or q
     const result = await first.proxyCall("bigb", "login.autorizar", "key=synthetic-query-secret",
       { method: "POST", body: "synthetic-request-secret", headers: { AGES_PASS: "synthetic-header-secret" } });
     first.completeTraceResponse(result.traceId, result.status, result.body.length);
-    const current = first.getTimingLog().find(row => row.id === result.traceId);
+    const current = first.getTimingLog().rows.find(row => row.id === result.traceId);
     assert.equal(current.status, 200);
     assert.ok(current.brokerOutAt);
     first.closeTimingStore();
 
     const second = new AgesConnectionPool("http://synthetic/ages", [{ kind: "bigb" }], undefined,
       { timingStorePath: file });
-    const restored = second.getTimingLog().find(row => row.id === result.traceId);
+    const restored = second.getTimingLog().rows.find(row => row.id === result.traceId);
     assert.equal(restored.totalMs, current.totalMs);
     assert.equal(restored.url, "/ages/login.autorizar.ages");
     assert.equal(restored.bytes, result.body.length);
@@ -65,7 +78,7 @@ test("finalized proxy timing survives recreation without request, response, or q
     second.closeTimingStore();
     const third = new AgesConnectionPool("http://synthetic/ages", [{ kind: "bigb" }], undefined,
       { timingStorePath: file });
-    assert.equal(third.getTimingLog().length, 0);
+    assert.equal(third.getTimingLog().rows.length, 0);
     third.closeTimingStore();
   } finally {
     global.fetch = originalFetch;
@@ -85,18 +98,30 @@ test("events persist without arbitrary error text and clear does not resurrect i
   first.pushTimingEvent("IIS restart fail: synthetic-event-secret", "synthetic-error-secret");
   const pending = first.createTimingTrace("bigb", "GET", "http://synthetic/ages/check.ages?token=synthetic-query-secret",
     "invalid-ip-secret", "invalid-source-secret", Date.now());
-  assert.equal(first.clearTimingLog().cleared, 2);
+  assert.equal(first.clearTimingLog().cleared, 1);
   first.completeTimingTrace(pending);
   first.closeTimingStore();
   const second = new AgesConnectionPool("http://synthetic/ages", [], undefined, { timingStorePath: file });
-  assert.deepEqual(second.getTimingLog(), []);
+  assert.deepEqual(second.getTimingLog(), { rows: [] });
   second.pushTimingEvent("IIS restart fail: synthetic-event-secret", "synthetic-error-secret");
-  const event = second.getTimingLog()[0];
+  const event = second.getTimingLog().rows[0];
   assert.equal(event.url, "IIS restart fail");
   assert.equal(event.error, "event_error");
   second.closeTimingStore();
   const third = new AgesConnectionPool("http://synthetic/ages", [], undefined, { timingStorePath: file });
-  assert.equal(third.getTimingLog().length, 1);
+  assert.equal(third.getTimingLog().rows.length, 1);
   assert.ok(!JSON.stringify(third.getTimingLog()).includes("synthetic-secret"));
   third.closeTimingStore();
+});
+
+test("clear between upstream completion and response update cannot resurrect a trace", t => {
+  const file = fixture(t);
+  const pool = new AgesConnectionPool("http://synthetic/ages", [], undefined, { timingStorePath: file });
+  const trace = pool.createTimingTrace("bigb", "GET", "http://synthetic/ages/test.ages", "", "", Date.now());
+  pool.completeTimingTrace(trace);
+  assert.equal(pool.getTimingLog().rows.length, 1);
+  assert.equal(pool.clearTimingLog().cleared, 1);
+  assert.equal(pool.completeTraceResponse(trace.id, 200, 10), undefined);
+  assert.deepEqual(pool.getTimingLog(), { rows: [] });
+  pool.closeTimingStore();
 });

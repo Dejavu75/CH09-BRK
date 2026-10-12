@@ -4,21 +4,25 @@ import Database from "better-sqlite3";
 
 export class TimingStore<T extends { id: string }> {
   private readonly db: Database.Database;
+  static readonly PAGE_SIZE = 100;
 
-  constructor(path: string, private readonly limit = 500) {
-    if (!path.trim() || !isAbsolute(path)) throw new Error("An absolute timing database path is required");
-    const directory = dirname(path);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    if (!lstatSync(directory).isDirectory()) throw new Error("Timing database directory must be a real directory");
-    chmodSync(directory, 0o700);
-    try {
-      closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (!lstatSync(path).isFile()) throw new Error("Timing database must be a regular file");
-      chmodSync(path, 0o600);
+  constructor(path?: string) {
+    if (path !== undefined) {
+      if (!path.trim() || !isAbsolute(path)) throw new Error("An absolute timing database path is required");
+      const directory = dirname(path);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      if (!lstatSync(directory).isDirectory()) throw new Error("Timing database directory must be a real directory");
+      chmodSync(directory, 0o700);
+      try {
+        closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (!lstatSync(path).isFile()) throw new Error("Timing database must be a regular file");
+        chmodSync(path, 0o600);
+      }
     }
-    this.db = new Database(path);
+    // An empty filename uses SQLite's temporary disk database for local runs.
+    this.db = new Database(path ?? "");
     this.db.pragma("journal_mode = WAL");
     this.db.exec(`CREATE TABLE IF NOT EXISTS timing_records (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,19 +31,27 @@ export class TimingStore<T extends { id: string }> {
     )`);
   }
 
-  load(): T[] {
-    const rows = this.db.prepare("SELECT payload FROM timing_records ORDER BY sequence DESC LIMIT ?")
-      .all(this.limit) as Array<{ payload: string }>;
-    return rows.reverse().map(row => JSON.parse(row.payload) as T);
+  page(cursor?: number): { rows: T[]; nextCursor?: number } {
+    const rows = (cursor === undefined
+      ? this.db.prepare("SELECT sequence, payload FROM timing_records ORDER BY sequence DESC LIMIT ?")
+        .all(TimingStore.PAGE_SIZE + 1)
+      : this.db.prepare("SELECT sequence, payload FROM timing_records WHERE sequence < ? ORDER BY sequence DESC LIMIT ?")
+        .all(cursor, TimingStore.PAGE_SIZE + 1)) as Array<{ sequence: number; payload: string }>;
+    const hasMore = rows.length > TimingStore.PAGE_SIZE;
+    const visible = rows.slice(0, TimingStore.PAGE_SIZE);
+    const payload = { rows: visible.map(row => JSON.parse(row.payload) as T) };
+    return hasMore ? { ...payload, nextCursor: visible.at(-1)!.sequence } : payload;
+  }
+
+  get(traceId: string): T | undefined {
+    const row = this.db.prepare("SELECT payload FROM timing_records WHERE trace_id = ?")
+      .get(traceId) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as T : undefined;
   }
 
   upsert(trace: T): void {
-    this.db.transaction(() => {
-      this.db.prepare(`INSERT INTO timing_records (trace_id, payload) VALUES (?, ?)
-        ON CONFLICT(trace_id) DO UPDATE SET payload = excluded.payload`).run(trace.id, JSON.stringify(trace));
-      this.db.prepare(`DELETE FROM timing_records WHERE sequence NOT IN
-        (SELECT sequence FROM timing_records ORDER BY sequence DESC LIMIT ?)`).run(this.limit);
-    })();
+    this.db.prepare(`INSERT INTO timing_records (trace_id, payload) VALUES (?, ?)
+      ON CONFLICT(trace_id) DO UPDATE SET payload = excluded.payload`).run(trace.id, JSON.stringify(trace));
   }
 
   clear(): number {

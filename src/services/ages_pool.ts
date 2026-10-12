@@ -192,8 +192,8 @@ export class AgesConnectionPool {
   private lastAgesHostRestartStartedAt?: string;
   private lastAgesHostRestartFinishedAt?: string;
   private initialWarmupFinished = false;
-  private readonly timingLog: AgesTimingTrace[] = [];
-  private readonly timingStore?: TimingStore<AgesTimingTrace>;
+  private readonly liveTimings = new Map<string, AgesTimingTrace>();
+  private readonly timingStore: TimingStore<AgesTimingTrace>;
   private readonly slotWaiters: Record<AgesPoolSlotKind, AgesSlotWaiter[]> = {
     bigb: [],
     mini: []
@@ -210,10 +210,7 @@ export class AgesConnectionPool {
     if (!timingStorePath && process.env.NODE_ENV === "production") {
       throw new Error("BROKER_TIMINGS_DB_PATH is required in production");
     }
-    if (timingStorePath) {
-      this.timingStore = new TimingStore<AgesTimingTrace>(timingStorePath);
-      this.timingLog.push(...this.timingStore.load());
-    }
+    this.timingStore = new TimingStore<AgesTimingTrace>(timingStorePath);
     this.backendConfiguration = backendConfiguration;
     backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
     this.drainTimeoutMs = options.drainTimeoutMs ?? getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
@@ -350,14 +347,13 @@ export class AgesConnectionPool {
     };
   }
 
-  getTimingLog(): AgesTimingTrace[] {
-    return [...this.timingLog].reverse();
+  getTimingLog(cursor?: number): { rows: AgesTimingTrace[]; nextCursor?: number } {
+    return this.timingStore.page(cursor);
   }
 
   clearTimingLog(): { status: string; cleared: number } {
-    const cleared = this.timingLog.length;
-    this.timingStore?.clear();
-    this.timingLog.length = 0;
+    const cleared = this.timingStore.clear();
+    this.liveTimings.clear();
 
     return {
       status: "ok",
@@ -365,7 +361,7 @@ export class AgesConnectionPool {
     };
   }
 
-  closeTimingStore(): void { this.timingStore?.close(); }
+  closeTimingStore(): void { this.timingStore.close(); }
 
   async request(slotId: number, endpoint: string, init: RequestInit = {}): Promise<Response> {
     const slot = this.getSlot(slotId);
@@ -458,11 +454,18 @@ export class AgesConnectionPool {
       const attemptBrokerInMs = Date.now();
       const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
       trace.slotWaitStartAt = new Date().toISOString();
-      const slot = await this.acquireSlot(kind, {
-        allowGrow: !this.warmupPromise && !isInternalBeat,
-        baseOnly: isInternalBeat,
-        excludeSlotIds: excludedSlotIds
-      });
+      let slot: AgesPoolSlot;
+      try {
+        slot = await this.acquireSlot(kind, {
+          allowGrow: !this.warmupPromise && !isInternalBeat,
+          baseOnly: isInternalBeat,
+          excludeSlotIds: excludedSlotIds
+        });
+      } catch (error) {
+        trace.error = "slot_acquisition_failed";
+        this.completeTimingTrace(trace);
+        throw error;
+      }
       const slotAcquiredMs = Date.now();
       const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
       trace.url = this.formatUrl(agesUrl);
@@ -593,7 +596,7 @@ export class AgesConnectionPool {
   }
 
   completeTraceResponse(traceId: string, status: number, bytes: number): AgesTimingTrace | undefined {
-    const trace = this.timingLog.find((item) => item.id === traceId);
+    const trace = this.timingStore.get(traceId);
 
     if (!trace) {
       return undefined;
@@ -603,7 +606,7 @@ export class AgesConnectionPool {
     trace.bytes = bytes;
     trace.brokerOutAt = new Date().toISOString();
     trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
-    this.persistTimingTrace(trace);
+    this.timingStore.upsert(trace);
 
     return trace;
   }
@@ -1324,17 +1327,8 @@ export class AgesConnectionPool {
   }
 
   private pushTimingTrace(trace: AgesTimingTrace): void {
-    this.timingLog.push(trace);
-
-    while (this.timingLog.length > 500) {
-      this.timingLog.shift();
-    }
-    if (trace.entryType === "event") this.persistTimingTrace(trace);
-  }
-
-  private persistTimingTrace(trace: AgesTimingTrace): void {
-    if (!this.timingLog.includes(trace)) return;
-    this.timingStore?.upsert(trace);
+    if (trace.entryType === "event") this.timingStore.upsert(trace);
+    else this.liveTimings.set(trace.id, trace);
   }
 
   private pushTimingEvent(message: string, errorDetail?: string): void {
@@ -1395,12 +1389,13 @@ export class AgesConnectionPool {
   }
 
   private completeTimingTrace(trace: AgesTimingTrace): void {
+    if (!this.liveTimings.delete(trace.id)) return;
     if (!trace.brokerOutAt) {
       trace.brokerOutAt = new Date().toISOString();
     }
 
     trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
-    this.persistTimingTrace(trace);
+    this.timingStore.upsert(trace);
   }
 
   private buildTraceHeaders(trace: AgesTimingTrace): Record<string, string> {
