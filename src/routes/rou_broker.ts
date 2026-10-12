@@ -190,6 +190,7 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       .send(result.body);
   } catch (error) {
     const sourceIp = getSourceIp(req);
+    const isWarmup = error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message);
     warn(
       [
         `proxy route err`,
@@ -197,14 +198,15 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
         `ip=${sourceIp.value || "unknown"}`,
         `ips=${sourceIp.source || "unknown"}`,
         `m=${req.method}`,
-        `u=${req.originalUrl}`,
+        `u=${req.originalUrl.split("?", 1)[0]}`,
         `h=${Object.keys(req.headers).sort().join(",") || "none"}`,
         `b=${getRequestBodySize(req)}`,
-        `err=${formatRouteError(error)}`
+        `st=${isWarmup ? 503 : 502}`,
+        `err=${safeRouteErrorName(error)}`
       ].join(" | ")
     );
 
-    if (error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message)) {
+    if (isWarmup && error instanceof Error) {
       res
         .setHeader("Retry-After", "60")
         .status(503)
@@ -365,6 +367,11 @@ function formatRouteError(error: unknown): string {
   }
 
   return String(error);
+}
+
+function safeRouteErrorName(error: unknown): string {
+  if (!(error instanceof Error)) return "Error";
+  return ["AbortError", "TimeoutError", "TypeError", "Error"].includes(error.name) ? error.name : "Error";
 }
 
 function setProxyResponseHeaders(res: Response, headers: Record<string, string | string[]>): void {

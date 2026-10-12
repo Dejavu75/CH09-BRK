@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const { AgesConnectionPool, agesConnectionPool, chooseLeastLoadedBackend, resolveIisAppPoolName } = require("../build/services/ages_pool");
 const { BrokerRouter, isBrokerAdminAuthorized } = require("../build/routes/rou_broker");
+const logger = require("../build/utils/logger");
 
 const dual = { mode: "dual", backends: [
   { id: "A", baseUrl: "http://ages-a" }, { id: "B", baseUrl: "http://ages-b" }
@@ -29,6 +30,34 @@ async function waitFor(check, timeout = 250) {
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
 }
+
+test("ordinary pool logs retain metadata without credential or response payloads", t => {
+  const messages = [];
+  const originalLog = logger.log;
+  const originalWarn = logger.warn;
+  logger.log = message => messages.push(message);
+  logger.warn = message => messages.push(message);
+  t.after(() => { logger.log = originalLog; logger.warn = originalWarn; });
+  const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }],
+    { mode: "legacy", backends: [{ id: "legacy", baseUrl: "http://legacy" }] });
+  const slot = pool.slots[0];
+  slot.agesToken = "secret-ages-token";
+  slot.aspNetSessionId = "secret-asp-session";
+  slot.warmupResponse = "secret-warmup-response";
+  slot.lastStatusCode = 200;
+  slot.lastError = "secret-upstream-error";
+  pool.logSlotReady(slot, 1);
+  pool.logSlotError(slot);
+  pool.logProxyError(slot, "GET", "http://legacy/ages/test?token=secret-query", "client", "socket", {
+    status: 500, responsePreview: "secret-response-preview",
+    error: new Error("secret-error-message"), requestHeaders: { Authorization: "secret-request-header" },
+    responseHeaders: { "Set-Cookie": "secret-response-header" }
+  });
+  const output = messages.join("\n");
+  assert.match(output, /st=500/);
+  assert.match(output, /reqh=Authorization/);
+  assert.doesNotMatch(output, /secret-|AGES_TOKEN=|ASP\.NET_SessionId=/);
+});
 
 test("keeps healthy legacy slots available after a partial warmup", async () => {
   let calls = 0;

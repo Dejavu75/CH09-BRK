@@ -16,6 +16,7 @@ exports.CredentialFile = void 0;
 const node_child_process_1 = require("node:child_process");
 const node_fs_1 = require("node:fs");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const session_store_1 = require("./session_store");
 const BCRYPT_HASH = /^\$2[aby]\$\d\d\$[./A-Za-z0-9]{53}$/;
 const SHA512_CRYPT_HASH = /^\$6\$(?:rounds=\d+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$/;
 class CredentialFile {
@@ -39,6 +40,10 @@ class CredentialFile {
         }
         if (this.users.size === 0)
             throw new Error("Credential file contains no users");
+    }
+    fingerprint(username) {
+        const hash = this.users.get(username);
+        return hash ? (0, session_store_1.sha256)(hash) : null;
     }
     verify(username, password) {
         return __awaiter(this, void 0, void 0, function* () {

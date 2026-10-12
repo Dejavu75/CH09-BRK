@@ -174,18 +174,20 @@ function proxyAgesRequest(kind, req, res, agesFunction) {
         }
         catch (error) {
             const sourceIp = getSourceIp(req);
+            const isWarmup = error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message);
             (0, logger_1.warn)([
                 `proxy route err`,
                 `kind=${kind}`,
                 `ip=${sourceIp.value || "unknown"}`,
                 `ips=${sourceIp.source || "unknown"}`,
                 `m=${req.method}`,
-                `u=${req.originalUrl}`,
+                `u=${req.originalUrl.split("?", 1)[0]}`,
                 `h=${Object.keys(req.headers).sort().join(",") || "none"}`,
                 `b=${getRequestBodySize(req)}`,
-                `err=${formatRouteError(error)}`
+                `st=${isWarmup ? 503 : 502}`,
+                `err=${safeRouteErrorName(error)}`
             ].join(" | "));
-            if (error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message)) {
+            if (isWarmup && error instanceof Error) {
                 res
                     .setHeader("Retry-After", "60")
                     .status(503)
@@ -322,6 +324,11 @@ function formatRouteError(error) {
         return `${error.name}:${error.message}`;
     }
     return String(error);
+}
+function safeRouteErrorName(error) {
+    if (!(error instanceof Error))
+        return "Error";
+    return ["AbortError", "TimeoutError", "TypeError", "Error"].includes(error.name) ? error.name : "Error";
 }
 function setProxyResponseHeaders(res, headers) {
     const ignoredHeaders = new Set(["connection", "content-encoding", "content-length", "transfer-encoding"]);

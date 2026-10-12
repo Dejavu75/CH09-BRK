@@ -4,7 +4,8 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
 export const SESSION_COOKIE = "__Host-broker_session";
-export type Session = { tokenHash: string; username: string; csrfHash: string; csrfToken: string; expiresAt: number };
+export type Session = { tokenHash: string; username: string; credentialFingerprint: string;
+  csrfHash: string; csrfToken: string; expiresAt: number };
 
 export function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -58,25 +59,33 @@ export class SessionStore {
     this.db.exec(`CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
       username TEXT NOT NULL,
+      credential_fingerprint TEXT NOT NULL DEFAULT '',
       csrf_hash TEXT NOT NULL,
       csrf_token TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
       last_seen_at INTEGER NOT NULL
     ); CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);`);
+    // Existing sessions have no credential binding and must not survive the upgrade.
+    const columns = this.db.pragma("table_info(sessions)") as Array<{ name: string }>;
+    if (!columns.some(column => column.name === "credential_fingerprint")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN credential_fingerprint TEXT NOT NULL DEFAULT ''; DELETE FROM sessions;");
+    }
   }
 
-  create(username: string, ttlSeconds: number, now: number): { token: string; csrfToken: string; expiresAt: number } {
+  create(username: string, fingerprint: string, ttlSeconds: number, now: number): { token: string; csrfToken: string; expiresAt: number } {
     const token = opaqueToken();
     const csrfToken = opaqueToken();
     const expiresAt = now + ttlSeconds;
-    this.db.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(sha256(token), username, sha256(csrfToken), csrfToken, expiresAt, now, now);
+    this.db.prepare(`INSERT INTO sessions (token_hash, username, credential_fingerprint,
+      csrf_hash, csrf_token, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(sha256(token), username, fingerprint, sha256(csrfToken), csrfToken, expiresAt, now, now);
     return { token, csrfToken, expiresAt };
   }
 
   find(token: string, now: number): Session | null {
-    const session = this.db.prepare(`SELECT token_hash AS tokenHash, username, csrf_hash AS csrfHash,
+    const session = this.db.prepare(`SELECT token_hash AS tokenHash, username,
+      credential_fingerprint AS credentialFingerprint, csrf_hash AS csrfHash,
       csrf_token AS csrfToken, expires_at AS expiresAt FROM sessions WHERE token_hash = ?`)
       .get(sha256(token)) as Session | undefined;
     if (!session) return null;
@@ -96,6 +105,19 @@ export class SessionStore {
 
   delete(token: string): void {
     this.db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
+  }
+
+  revokeStaleCredentials(currentFingerprint: (username: string) => string | null): void {
+    const sessions = this.db.prepare("SELECT token_hash AS tokenHash, username, credential_fingerprint AS fingerprint FROM sessions")
+      .all() as Array<{ tokenHash: string; username: string; fingerprint: string }>;
+    const remove = this.db.prepare("DELETE FROM sessions WHERE token_hash = ?");
+    this.db.transaction(() => {
+      for (const session of sessions) {
+        if (!session.fingerprint || session.fingerprint !== currentFingerprint(session.username)) {
+          remove.run(session.tokenHash);
+        }
+      }
+    })();
   }
 
   cleanup(now: number): void {

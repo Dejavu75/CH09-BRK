@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import bcrypt from "bcryptjs";
+import { sha256 } from "./session_store";
 
 const BCRYPT_HASH = /^\$2[aby]\$\d\d\$[./A-Za-z0-9]{53}$/;
 const SHA512_CRYPT_HASH = /^\$6\$(?:rounds=\d+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$/;
@@ -23,6 +24,11 @@ export class CredentialFile {
       this.users.set(username, hash);
     }
     if (this.users.size === 0) throw new Error("Credential file contains no users");
+  }
+
+  fingerprint(username: string): string | null {
+    const hash = this.users.get(username);
+    return hash ? sha256(hash) : null;
   }
 
   async verify(username: string, password: string): Promise<boolean> {

@@ -32,9 +32,10 @@ function loadSource(relativePath, dependencies) {
   return exports;
 }
 
-function createProxy(upstreamUrl) {
+function createProxy(upstreamUrl, options = {}) {
   const pool = {
     async proxyCall(_kind, _name, _query, init) {
+      if (options.proxyError) throw options.proxyError;
       assert.equal(init.headers["content-length"], undefined, "fetch must calculate body length");
       assert.equal(init.headers["transfer-encoding"], undefined, "incoming framing must not be forwarded");
       const response = await fetch(upstreamUrl, { ...init, signal: AbortSignal.timeout(2000) });
@@ -53,7 +54,7 @@ function createProxy(upstreamUrl) {
     },
     "../services/ages_pool": { agesConnectionPool: pool },
     "../services/heartbeat_metadata": { configureHeartbeatExtraData() {} },
-    "../utils/logger": { warn() {} },
+    "../utils/logger": { warn: options.onWarn ?? (() => {}) },
     "../generated/build_info": { BROKER_BUILD_INFO: {} },
     "../auth/http": { SERVICE_KEY_HEADER: "x-broker-service-api-key" },
     "../auth/session_store": { SESSION_COOKIE: "__Host-broker_session" }
@@ -149,3 +150,18 @@ for (const prefix of ["/ages", "/foreign/broker/ages"]) {
     });
   }
 }
+
+test("proxy failure log excludes query values and upstream error messages", async t => {
+  const warnings = [];
+  const proxyUrl = await listen(createProxy("http://unused", {
+    proxyError: new Error("secret-upstream-error"),
+    onWarn: message => warnings.push(message)
+  }), t);
+  const response = await request(`${proxyUrl}/ages/autorizar?token=secret-query`, "GET", {}, undefined);
+  assert.equal(response.status, 502);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /u=\/ages\/autorizar/);
+  assert.match(warnings[0], /st=502/);
+  assert.match(warnings[0], /err=Error/);
+  assert.doesNotMatch(warnings[0], /secret-|token=/);
+});

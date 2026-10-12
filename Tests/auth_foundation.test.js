@@ -82,3 +82,58 @@ test("invalid auth configuration and missing credential source fail closed", t =
   assert.throws(() => new BrokerAuthService({ ...config, publicOrigin: "http://broker.example.test" }), /HTTPS/);
   assert.throws(() => new BrokerAuthService({ ...config, credentialFile: "missing-users.htpasswd" }), /ENOENT/);
 });
+
+test("restart revokes sessions for removed users and rotated credential hashes", async t => {
+  const { config, credentialFile, cleanup } = fixture();
+  t.after(cleanup);
+  const alice = bcrypt.hashSync("synthetic-secret", 4);
+  const bob = bcrypt.hashSync("bob-secret", 4);
+  fs.writeFileSync(credentialFile, `alice:${alice}\nbob:${bob}\n`);
+  let auth = new BrokerAuthService(config);
+  const login = await auth.login({ username: "alice", password: "synthetic-secret",
+    clientKey: "client", origin: config.publicOrigin }, 1000);
+  assert.equal(login.status, 200);
+  auth.close();
+
+  fs.writeFileSync(credentialFile, `bob:${bob}\n`);
+  auth = new BrokerAuthService(config);
+  const Database = require("better-sqlite3");
+  let persisted = new Database(config.databaseFile, { readonly: true });
+  assert.equal(persisted.prepare("SELECT count(*) AS n FROM sessions").get().n, 0);
+  persisted.close();
+  assert.equal(auth.session(login.setCookie, 1000).status, 401);
+  auth.close();
+
+  fs.writeFileSync(credentialFile, `alice:${alice}\nbob:${bob}\n`);
+  auth = new BrokerAuthService(config);
+  const next = await auth.login({ username: "alice", password: "synthetic-secret",
+    clientKey: "client", origin: config.publicOrigin }, 1000);
+  auth.close();
+  fs.writeFileSync(credentialFile, `alice:${bcrypt.hashSync("new-secret", 4)}\nbob:${bob}\n`);
+  auth = new BrokerAuthService(config);
+  persisted = new Database(config.databaseFile, { readonly: true });
+  assert.equal(persisted.prepare("SELECT count(*) AS n FROM sessions").get().n, 0);
+  persisted.close();
+  assert.equal(auth.verify({ cookieHeader: next.setCookie, method: "GET" }, 1000).status, 401);
+  assert.equal((await auth.login({ username: "alice", password: "synthetic-secret",
+    clientKey: "client", origin: config.publicOrigin }, 1000)).status, 401);
+  auth.close();
+});
+
+test("legacy unbound sessions are removed on database upgrade", t => {
+  const { config, databaseFile, cleanup } = fixture();
+  t.after(cleanup);
+  fs.mkdirSync(path.dirname(databaseFile));
+  const Database = require("better-sqlite3");
+  const db = new Database(databaseFile);
+  db.exec(`CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL,
+    csrf_hash TEXT NOT NULL, csrf_token TEXT NOT NULL, expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL);
+    INSERT INTO sessions VALUES ('legacy', 'alice', 'csrf', 'csrf', 999999, 0, 0);`);
+  db.close();
+  const auth = new BrokerAuthService(config);
+  auth.close();
+  const upgraded = new Database(databaseFile);
+  assert.equal(upgraded.prepare("SELECT count(*) AS n FROM sessions").get().n, 0);
+  upgraded.close();
+});

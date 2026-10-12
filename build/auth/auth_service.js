@@ -26,6 +26,7 @@ class BrokerAuthService {
         this.windowMs = positive((_c = config.loginWindowSeconds) !== null && _c !== void 0 ? _c : 900) * 1000;
         this.users = new credentials_1.CredentialFile(config.credentialFile);
         this.sessions = new session_store_1.SessionStore(config.databaseFile);
+        this.sessions.revokeStaleCredentials(username => this.users.fingerprint(username));
     }
     login(input_1) {
         return __awaiter(this, arguments, void 0, function* (input, nowMs = Date.now()) {
@@ -46,7 +47,10 @@ class BrokerAuthService {
                 return { status: 401 };
             }
             this.attempts.delete(key);
-            const created = this.sessions.create(username, this.ttl, Math.floor(nowMs / 1000));
+            const fingerprint = this.users.fingerprint(username);
+            if (!fingerprint)
+                return { status: 401 };
+            const created = this.sessions.create(username, fingerprint, this.ttl, Math.floor(nowMs / 1000));
             return { status: 200, username, csrfToken: created.csrfToken,
                 expiresAt: created.expiresAt, setCookie: (0, session_store_1.cookie)(created.token, this.ttl) };
         });
@@ -92,7 +96,13 @@ class BrokerAuthService {
         if (!token)
             return null;
         const session = this.sessions.find(token, Math.floor(nowMs / 1000));
-        return session ? { token, session } : null;
+        if (!session)
+            return null;
+        if (session.credentialFingerprint !== this.users.fingerprint(session.username)) {
+            this.sessions.delete(token);
+            return null;
+        }
+        return { token, session };
     }
     validCsrf(value, session) {
         return typeof value === "string" && (0, session_store_1.equalHash)((0, session_store_1.sha256)(value), session.csrfHash);
