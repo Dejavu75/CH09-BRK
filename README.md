@@ -76,9 +76,12 @@ sesión: esto **no es SSO**. La vista de timings ahora omite cuerpos,
 parámetros de URL y headers no aprobados antes de mostrar o persistir datos.
 El historial de timings no elimina registros por cantidad: queda en SQLite
 hasta que un operador use **Limpiar**. `GET /foreign/broker/pool/timings`
-devuelve `{ rows, nextCursor }` en páginas de 100 registros ordenados del más
-reciente al más antiguo; continuar con `?cursor=<nextCursor>`. La vista sólo
-muestra una página a la vez. Se debe monitorear espacio en disco y conservar
+devuelve `{ rows, liveRows?, nextCursor }`: `rows` contiene hasta 100 registros
+finalizados por página, ordenados del más reciente al más antiguo; continuar
+con `?cursor=<nextCursor>`. La primera página puede incluir además hasta 100
+llamadas en curso en `liveRows`, que no forman parte del cursor persistente.
+La vista sólo muestra una página de historial a la vez. Se debe monitorear
+espacio en disco y conservar
 backups del volumen persistente según la política operativa.
 
 El login limita intentos por IP cliente. Sin configuración adicional se usa

@@ -191,7 +191,14 @@ class AgesConnectionPool {
         };
     }
     getTimingLog(cursor) {
-        return this.timingStore.page(cursor);
+        const page = this.timingStore.page(cursor);
+        if (cursor !== undefined || this.liveTimings.size === 0)
+            return page;
+        const liveRows = [...this.liveTimings.values()]
+            .sort((left, right) => right.brokerInAt.localeCompare(left.brokerInAt) || right.id.localeCompare(left.id))
+            .slice(0, timing_store_1.TimingStore.PAGE_SIZE)
+            .map(trace => (Object.assign({}, trace)));
+        return Object.assign(Object.assign({}, page), { liveRows });
     }
     clearTimingLog() {
         const cleared = this.timingStore.clear();

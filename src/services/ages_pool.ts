@@ -346,8 +346,15 @@ export class AgesConnectionPool {
     };
   }
 
-  getTimingLog(cursor?: number): { rows: AgesTimingTrace[]; nextCursor?: number } {
-    return this.timingStore.page(cursor);
+  getTimingLog(cursor?: number): { rows: AgesTimingTrace[]; liveRows?: AgesTimingTrace[]; nextCursor?: number } {
+    const page = this.timingStore.page(cursor);
+    if (cursor !== undefined || this.liveTimings.size === 0) return page;
+
+    const liveRows = [...this.liveTimings.values()]
+      .sort((left, right) => right.brokerInAt.localeCompare(left.brokerInAt) || right.id.localeCompare(left.id))
+      .slice(0, TimingStore.PAGE_SIZE)
+      .map(trace => ({ ...trace }));
+    return { ...page, liveRows };
   }
 
   clearTimingLog(): { status: string; cleared: number } {
