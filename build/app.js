@@ -45,6 +45,7 @@ const path_1 = __importDefault(require("path"));
 const se_configbase_1 = require("se_configbase");
 const auth_service_1 = require("./auth/auth_service");
 const http_2 = require("./auth/http");
+const trusted_proxy_1 = require("./auth/trusted_proxy");
 const rou_broker_1 = require("./routes/rou_broker");
 const ages_pool_1 = require("./services/ages_pool");
 const heartbeat_metadata_1 = require("./services/heartbeat_metadata");
@@ -56,11 +57,12 @@ const certbotWebroot = (_a = process.env.CERTBOT_WEBROOT) !== null && _a !== voi
 const certificateRoot = (_b = process.env.CERT_PATH_CONTAINER) !== null && _b !== void 0 ? _b : "/app/certificados";
 const configuredRequestBodyLimit = (_c = process.env.REQUEST_BODY_LIMIT) === null || _c === void 0 ? void 0 : _c.trim();
 const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$/i.test(configuredRequestBodyLimit) ? configuredRequestBodyLimit : "100mb";
-app.set("trust proxy", true);
+app.set("trust proxy", (0, trusted_proxy_1.trustedProxyAddresses)(process.env.BROKER_TRUSTED_PROXY_IPS));
 app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroot}/.well-known/acme-challenge`, {
     dotfiles: "allow",
     fallthrough: false
 }));
+app.use(http_2.requireSecureTransport);
 const auth = new auth_service_1.BrokerAuthService({
     publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
     credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),

@@ -66,7 +66,9 @@ function createProxy(upstreamUrl) {
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
     "./auth/auth_service": { BrokerAuthService: class {} },
-    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; } },
+    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; },
+      requireSecureTransport(_req, _res, next) { next(); } },
+    "./auth/trusted_proxy": { trustedProxyAddresses: () => false },
     "./utils/logger": { log() {}, error() {}, isConfigEnabled: () => true },
     http: { createServer(value) { app = value; return { listen() {} }; } }
   });

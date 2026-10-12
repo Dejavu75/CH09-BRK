@@ -1,15 +1,16 @@
 FROM node:22-alpine
 WORKDIR /app
 
-# Install git and OpenSSH client tools.
-RUN apk add --no-cache git openssh-client
+# SHA512-crypt verification uses htpasswd; native SQLite needs a build toolchain
+# when no compatible Alpine prebuilt binary is available.
+RUN apk add --no-cache git openssh-client apache2-utils
 
 # Copy only package.json and package-lock.json to leverage Docker cache
 COPY ./package.json ./package-lock.json ./
 
-# Compile native dependencies with a temporary Alpine toolchain.
+# Keep compilers out of the runtime image after native dependency installation.
 RUN apk add --no-cache --virtual .native-build-deps python3 make g++ \
-    && npm install \
+    && npm ci --omit=dev \
     && apk del .native-build-deps \
     && npm cache clean --force
 

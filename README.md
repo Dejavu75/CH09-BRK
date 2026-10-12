@@ -22,6 +22,75 @@ Para build de imagen:
 npm run build
 ```
 
+## Login y estado persistente
+
+El Broker requiere configuración explícita antes de arrancar. En las tres
+plantillas Compose, `BROKER_AUTH_HTPASSWD_HOST_PATH` debe señalar el **mismo
+archivo htpasswd de BackGES**, montado en solo lectura; no se genera otro
+usuario ni se copia el archivo al repositorio. El archivo debe estar en el
+disco local del guest `ges01`, bajo `/srv/solinges`. Si BackGES usa hoy una
+ruta del host físico o un montaje compartido, primero hace falta una migración
+coordinada y autorizada: no se debe apuntar Broker a `/mnt`, `/media`, SMB,
+NFS, 9p, drvfs ni al host Hyper-V. Verificar la ruta real de BackGES antes de
+asignar esta variable; no hay un valor universal para su instalación.
+
+`BROKER_STATE_HOST_PATH` debe ser un directorio persistente y privado del
+mismo guest, por ejemplo `/srv/solinges/ecosystem/ch09-brk/state` (modo 0700).
+Los archivos `sessions.sqlite` y `timings.sqlite` viven allí; conservar el
+directorio entero, incluidos los posibles archivos SQLite WAL/SHM, al recrear
+el contenedor. Los bind mounts usan `create_host_path: false` para impedir
+que Docker cree silenciosamente un archivo o directorio equivocado. En una
+instalación no Compose, configurar también las rutas internas
+`BROKER_AUTH_HTPASSWD_PATH`, `BROKER_AUTH_DB_PATH` y
+`BROKER_TIMINGS_DB_PATH`. La ausencia del archivo de usuarios, origen HTTPS,
+clave de servicio o estado escribible impide el arranque. Los usuarios se leen
+al iniciar el proceso: reiniciar Broker después de cambiar el htpasswd de
+BackGES para incorporar altas o bajas.
+
+Configurar `BROKER_PUBLIC_ORIGIN` con el origen HTTPS exacto que usa el
+navegador (esquema, host y puerto si corresponde, sin barra final). Generar
+`BROKER_SERVICE_API_KEY` como secreto aleatorio de al menos 32 bytes,
+guardarlo fuera de Git y enviarlo en `X-Broker-Service-Api-Key` desde cada
+consumidor automatizado de AGES y heartbeat. No reutilizar la clave de
+administración anterior. Antes de activar, actualizar los consumidores y
+verificar que sus peticiones autenticadas todavía llegan al upstream; de lo
+contrario la nueva compuerta devolverá 401.
+
+El challenge ACME es la única excepción HTTP. Login, sesión, páginas y rutas
+de máquina responden 403 por HTTP, sin redirección que pueda reenviar
+credenciales. Si producción publica solamente el puerto HTTP del contenedor,
+debe existir un terminador TLS confiable delante del Broker y su IP exacta
+debe estar en `BROKER_TRUSTED_PROXY_IPS`; ese proxy debe sobrescribir
+`X-Forwarded-Proto` con `https` únicamente para conexiones TLS y bloquear
+el acceso directo de clientes al puerto interno. Sin TLS directo o ese proxy
+configurado, la instalación falla cerrada para todas las rutas protegidas.
+
+`/auth/login` ofrece el acceso humano. Las páginas de pool, timings y
+administración requieren sesión de navegador; los proxy endpoints `/ages`,
+`/foreign/broker/ages`, health y heartbeat requieren la clave de servicio.
+El challenge `/.well-known/acme-challenge` permanece público para ACME.
+Las sesiones usan cookie Secure/HttpOnly/SameSite=Strict, CSRF y una duración
+de 30 días: es una decisión más restrictiva que los 365 días observados en
+el runtime actual de BackGES. La identidad de usuarios se comparte, no la
+sesión: esto **no es SSO**. La vista de timings ahora omite cuerpos,
+parámetros de URL y headers no aprobados antes de mostrar o persistir datos.
+
+El login limita intentos por IP cliente. Sin configuración adicional se usa
+la IP del socket directo y se ignoran los headers de reenvío. Si hay un proxy
+inverso, fijar `BROKER_TRUSTED_PROXY_IPS` a sus direcciones IP concretas,
+separadas por comas; no admite rangos ni `trust proxy=true`. Configurar y
+verificar que el proxy elimina/sobrescribe los headers `X-Forwarded-*` que
+recibe del exterior. Un valor ausente detrás de Nginx agrupa a los usuarios
+en un mismo límite de intentos; uno demasiado amplio permite falsificar IPs.
+
+Antes de cualquier recreación, confirmar que ambos paths resuelven en el
+filesystem local del guest, que el archivo de usuarios no es un symlink y
+que existe una copia de seguridad verificable del directorio de estado.
+Validar Compose con `docker compose config --quiet` y probar login, rechazo
+sin credenciales, ACME y persistencia tras recreación. Esta documentación no
+autoriza ni ejecuta una instalación; los scripts existentes que usan `/mnt`
+no deben invocarse para esta migración.
+
 ## Contrato público
 
 | Área | Valor |

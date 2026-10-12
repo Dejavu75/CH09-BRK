@@ -6,7 +6,8 @@ import path from "path";
 import { DoormanController, getFullCors, getServingConfig, registerService } from "se_configbase";
 
 import { BrokerAuthService } from "./auth/auth_service";
-import { createAuthHttp } from "./auth/http";
+import { createAuthHttp, requireSecureTransport } from "./auth/http";
+import { trustedProxyAddresses } from "./auth/trusted_proxy";
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
 import { configureHeartbeatExtraData } from "./services/heartbeat_metadata";
@@ -21,7 +22,7 @@ const certificateRoot = process.env.CERT_PATH_CONTAINER ?? "/app/certificados";
 const configuredRequestBodyLimit = process.env.REQUEST_BODY_LIMIT?.trim();
 const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$/i.test(configuredRequestBodyLimit) ? configuredRequestBodyLimit : "100mb";
 
-app.set("trust proxy", true);
+app.set("trust proxy", trustedProxyAddresses(process.env.BROKER_TRUSTED_PROXY_IPS));
 app.use(
   "/.well-known/acme-challenge",
   express.static(`${certbotWebroot}/.well-known/acme-challenge`, {
@@ -29,6 +30,7 @@ app.use(
     fallthrough: false
   })
 );
+app.use(requireSecureTransport);
 const auth = new BrokerAuthService({
   publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
   credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),

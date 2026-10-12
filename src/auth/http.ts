@@ -5,6 +5,15 @@ import { BrokerAuthService } from "./auth_service";
 
 export const SERVICE_KEY_HEADER = "x-broker-service-api-key";
 
+export const requireSecureTransport: RequestHandler = (req, res, next) => {
+  if (req.secure) {
+    next();
+    return;
+  }
+  // Do not redirect: a redirect could forward credentials or service keys.
+  res.status(403).set("Cache-Control", "no-store").json({ error: "HTTPS required" });
+};
+
 function safeNext(value: unknown): string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") &&
     !/[\\\r\n]/.test(value) ? value : "/foreign/broker/pool/show";
@@ -80,8 +89,7 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
     const result = await auth.login({
       username: req.body?.username,
       password: req.body?.password,
-      // req.ip is derived from untrusted X-Forwarded-For while app.ts trusts every proxy.
-      clientKey: req.socket.remoteAddress || "unknown",
+      clientKey: req.ip || req.socket.remoteAddress || "unknown",
       origin: req.get("origin")
     });
     res.set("Cache-Control", "no-store");

@@ -9,12 +9,21 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SERVICE_KEY_HEADER = void 0;
+exports.requireSecureTransport = exports.SERVICE_KEY_HEADER = void 0;
 exports.isMachineRoute = isMachineRoute;
 exports.createAuthHttp = createAuthHttp;
 const node_crypto_1 = require("node:crypto");
 const express_1 = require("express");
 exports.SERVICE_KEY_HEADER = "x-broker-service-api-key";
+const requireSecureTransport = (req, res, next) => {
+    if (req.secure) {
+        next();
+        return;
+    }
+    // Do not redirect: a redirect could forward credentials or service keys.
+    res.status(403).set("Cache-Control", "no-store").json({ error: "HTTPS required" });
+};
+exports.requireSecureTransport = requireSecureTransport;
 function safeNext(value) {
     return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") &&
         !/[\\\r\n]/.test(value) ? value : "/foreign/broker/pool/show";
@@ -84,8 +93,7 @@ function createAuthHttp(auth, serviceKey) {
         const result = yield auth.login({
             username: (_a = req.body) === null || _a === void 0 ? void 0 : _a.username,
             password: (_b = req.body) === null || _b === void 0 ? void 0 : _b.password,
-            // req.ip is derived from untrusted X-Forwarded-For while app.ts trusts every proxy.
-            clientKey: req.socket.remoteAddress || "unknown",
+            clientKey: req.ip || req.socket.remoteAddress || "unknown",
             origin: req.get("origin")
         });
         res.set("Cache-Control", "no-store");
