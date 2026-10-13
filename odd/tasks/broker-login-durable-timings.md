@@ -126,6 +126,22 @@ requested that this arbitrary retention cap be removed.
   found no route escalation or logging bypass. Shared HMAC possession does not
   prove unique MS07 identity: any holder could mint an MS07-looking token.
   Actual MS07 `MSCODE=MS07` and shared-secret availability are unverified.
+- [ ] **T12 — Bootstrap durable state on an existing guest mount.** When
+  explicit database paths are absent, initialize private session and timing
+  databases beneath the already-mounted `/etc/nages2/logdir` path. Reject an
+  absent, symlinked, read-only, or non-local mount instead of writing to the
+  container layer. Preserve explicit paths for configured installations and
+  keep mount validation separate from claims about the host's physical
+  backing. Route: delegated direct. Trigger: startup, both stores, mount
+  validation, tests, and documentation span multiple non-trivial files;
+  preparation was delegated. TDD: unset; runner `npm test` and `npm run tsc`.
+  RDD: clone-local disabled/unmanaged. Checks: absent/disallowed mount and
+  symlink rejection, private directory permissions, restart/reopen and
+  durable clear with SQLite sidecars, explicit override compatibility,
+  Docker image build, diff check. A short-syntax Compose bind can silently
+  create an empty host directory; image checks cannot prove guest-local host
+  backing or prevent host log rotation from deleting state. T10 remains open
+  until actual guest storage and recreation behavior are verified.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
