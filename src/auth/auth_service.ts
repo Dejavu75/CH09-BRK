@@ -1,5 +1,9 @@
 import { CredentialFile } from "./credentials";
 import { clearCookie, cookie, equalHash, readSessionCookie, Session, SessionStore, sha256 } from "./session_store";
+import { warn } from "../utils/logger";
+
+const CLEANUP_INTERVAL_MS = 60_000;
+const CLEANUP_BATCH_SIZE = 1_000;
 
 export type AuthConfig = {
   publicOrigin: string;
@@ -16,6 +20,8 @@ export class BrokerAuthService {
   private readonly users: CredentialFile;
   private readonly sessions: SessionStore;
   private readonly attempts = new Map<string, { count: number; resetAt: number }>();
+  private attemptsCursor = this.attempts.entries();
+  private readonly cleanupTimer: NodeJS.Timeout;
   private readonly origin: string;
   private readonly ttl: number;
   private readonly limit: number;
@@ -33,6 +39,10 @@ export class BrokerAuthService {
     this.users = new CredentialFile(config.credentialFile);
     this.sessions = new SessionStore(config.databaseFile);
     this.sessions.revokeStaleCredentials(username => this.users.fingerprint(username));
+    this.cleanupTimer = setInterval(() => {
+      try { this.cleanup(); } catch { warn("Broker auth cleanup failed"); }
+    }, CLEANUP_INTERVAL_MS);
+    this.cleanupTimer.unref();
   }
 
   async login(input: { username: unknown; password: unknown; clientKey: string; origin: string | undefined }, nowMs = Date.now()): Promise<AuthResult> {
@@ -85,12 +95,24 @@ export class BrokerAuthService {
     return { status: 200, setCookie: clearCookie() };
   }
 
-  cleanup(nowMs = Date.now()): void {
-    for (const [key, attempt] of this.attempts) if (attempt.resetAt <= nowMs) this.attempts.delete(key);
-    this.sessions.cleanup(Math.floor(nowMs / 1000));
+  cleanup(nowMs = Date.now(), batchSize = CLEANUP_BATCH_SIZE): void {
+    if (!Number.isSafeInteger(batchSize) || batchSize <= 0) throw new Error("Invalid auth cleanup batch size");
+    for (let scanned = 0; scanned < batchSize; scanned++) {
+      const entry = this.attemptsCursor.next();
+      if (entry.done) {
+        this.attemptsCursor = this.attempts.entries();
+        break;
+      }
+      const [key, attempt] = entry.value;
+      if (attempt.resetAt <= nowMs) this.attempts.delete(key);
+    }
+    this.sessions.cleanup(Math.floor(nowMs / 1000), batchSize);
   }
 
-  close(): void { this.sessions.close(); }
+  close(): void {
+    clearInterval(this.cleanupTimer);
+    this.sessions.close();
+  }
 
   private current(cookieHeader: string | undefined, nowMs: number): { token: string; session: Session } | null {
     const token = readSessionCookie(cookieHeader);

@@ -119,8 +119,10 @@ class SessionStore {
             }
         })();
     }
-    cleanup(now) {
-        this.db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
+    cleanup(now, limit) {
+        this.db.prepare(`DELETE FROM sessions WHERE token_hash IN (
+      SELECT token_hash FROM sessions WHERE expires_at <= ? ORDER BY expires_at, token_hash LIMIT ?
+    )`).run(now, limit);
     }
     close() { this.db.close(); }
 }

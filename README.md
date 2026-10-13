@@ -84,7 +84,9 @@ La vista sólo muestra una página de historial a la vez. Se debe monitorear
 espacio en disco y conservar
 backups del volumen persistente según la política operativa.
 
-El login limita intentos por IP cliente. Sin configuración adicional se usa
+El login limita intentos por IP cliente. Un barrido periódico, acotado a 1.000
+entradas por ciclo, elimina intentos vencidos y sesiones caducadas del estado
+persistente sin cerrar sesiones activas. Sin configuración adicional se usa
 la IP del socket directo y se ignoran los headers de reenvío. Si hay un proxy
 inverso, fijar `BROKER_TRUSTED_PROXY_IPS` a sus direcciones IP concretas,
 separadas por comas; no admite rangos ni `trust proxy=true`. Configurar y
