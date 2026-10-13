@@ -126,7 +126,7 @@ requested that this arbitrary retention cap be removed.
   found no route escalation or logging bypass. Shared HMAC possession does not
   prove unique MS07 identity: any holder could mint an MS07-looking token.
   Actual MS07 `MSCODE=MS07` and shared-secret availability are unverified.
-- [ ] **T12 — Bootstrap durable state on an existing guest mount.** When
+- [x] **T12 — Bootstrap durable state on an existing guest mount.** When
   explicit database paths are absent, initialize private session and timing
   databases beneath the already-mounted `/etc/nages2/logdir` path. Reject an
   absent, symlinked, read-only, or non-local mount instead of writing to the
@@ -146,6 +146,16 @@ requested that this arbitrary retention cap be removed.
   found that chmod alone does not make a foreign-owned preexisting child
   private; reject it before accepting the fallback. Newer Compose templates
   still set both explicit DB paths and therefore never take this fallback.
+  Local commits `462e74151d9390d8ebd68688b1b367a5087cbc33` and
+  `575ad74c29bbeb47ea7ba2927b1e07d3cbad5d66` on
+  `feat/broker-login-durable-timings-12-state` (184 authored changed lines,
+  unpushed) implement the guarded fallback and review correction. TypeScript,
+  focused 3/3 Windows tests, Docker build, and local container checks for a
+  named volume (start) versus absent/tmpfs/foreign-owned mounts (reject)
+  passed; diff and secret scans passed. Full Windows suite: 99 pass, one
+  unrelated pre-existing IIS CRLF failure, one root-only ownership test
+  skipped on Windows and covered by the Docker check. Runtime backing,
+  rotation, backup, and unchanged ges01 recreation remain T10 gates.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -245,8 +255,8 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 2,274 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
-  T8 101, T9 101, T11 122; generated `build` excluded). The published chain has draft tracker PR #8
+  count: 2,458 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101, T9 101, T11 122, T12 184; generated `build` excluded). The published chain has draft tracker PR #8
   (`feat/broker-login-durable-timings`) against `main` and eight cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
@@ -267,7 +277,7 @@ requested that this arbitrary retention cap be removed.
   pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
   read-only review found that expired login attempts and session rows had no
   scheduled cleanup; T8 corrected this in bounded sweeps. T9 is committed
-  locally but not published; T11 is locally checked and unpushed;
+  locally but not published; T11 and T12 are locally checked and unpushed;
   T10 remains open for image-only initialization.
   Next: resolve the machine-client authentication contract and external
   origin before claiming automatic deployment; keep the tracker unmerged until
