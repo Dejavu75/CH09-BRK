@@ -35,12 +35,12 @@ app.use(
 app.use(requireSecureTransport);
 const sslConfig = getSslConfig();
 const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
-const serviceKey = loadServiceKey(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
 const auth = new BrokerAuthService({
   publicOrigin: process.env.BROKER_PUBLIC_ORIGIN?.trim() || undefined,
   certificatePem: sslConfig.ready ? readFileSync(sslConfig.certPath) : undefined,
   databaseFile: authDatabaseFile
 });
+const serviceKey = loadServiceKey(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
 const authHttp = createAuthHttp(auth, serviceKey, undefined, verifyMs07BeatCentrally);
 app.use("/auth", authHttp.routes);
 app.use(authHttp.gate);

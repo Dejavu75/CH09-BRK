@@ -67,12 +67,12 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
 app.use(http_2.requireSecureTransport);
 const sslConfig = getSslConfig();
 const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
-const serviceKey = (0, service_key_1.loadServiceKey)(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
 const auth = new auth_service_1.BrokerAuthService({
     publicOrigin: ((_d = process.env.BROKER_PUBLIC_ORIGIN) === null || _d === void 0 ? void 0 : _d.trim()) || undefined,
     certificatePem: sslConfig.ready ? (0, fs_1.readFileSync)(sslConfig.certPath) : undefined,
     databaseFile: authDatabaseFile
 });
+const serviceKey = (0, service_key_1.loadServiceKey)(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
 const authHttp = (0, http_2.createAuthHttp)(auth, serviceKey, undefined, central_beat_1.verifyMs07BeatCentrally);
 app.use("/auth", authHttp.routes);
 app.use(authHttp.gate);
