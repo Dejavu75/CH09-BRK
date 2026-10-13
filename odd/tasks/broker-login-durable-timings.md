@@ -375,6 +375,12 @@ requested that this arbitrary retention cap be removed.
 
 ## Log
 
+- 2026-10-13 user approval: "si" to the proposal "¿Autorizás cambiar el
+  contrato para que el Broker valide el beat consultando a MS07 en NAGES por
+  HTTPS, sin secreto en cada ges01 y fallando cerrado si NAGES no responde?"
+  T10 now includes a central validation endpoint in MS07 and a fail-closed
+  Broker client. No CH09 deployment or weakening of other machine gates is
+  authorized by this approval.
 - 2026-10-13 user clarification: "Aceptado" after the proposal to adapt the
   image for Lecar's uid-1000-owned guest-local log volume without changing
   ges01. The root container may trust the volume owner, but the owner can
