@@ -89,24 +89,32 @@ requested that this arbitrary retention cap be removed.
   existing guest-local persistent storage, derive or validate the HTTPS
   browser origin without accepting untrusted host/proxy data, and preserve a
   working authenticated contract for existing machine consumers without
-  manually preparing each `ges01`. Route: delegated direct. Trigger:
-  cross-cutting startup, security gate, deployment, and tests across multiple
-  non-trivial files. Current blockers: the image still requires a machine
-  secret not proven available to MS07, and local origin/state fallbacks need
-  validation against the actual guest's proxy, certificate and log mount.
+  manually preparing each `ges01`. Route: direct inline after delegated
+  read-only mapping; independent high-risk verification follows. The approved
+  central validation contract removes the per-ges01 HMAC secret and the image
+  now persists a generated service key when no override exists. Actual NAGES
+  HTTPS reachability, MS07 rollout, unchanged-Compose startup, and local
+  origin/state fallbacks still need runtime validation against the guest.
   Checks: unchanged-Compose start, two human logins, Broker-owned machine 401 without
   authority and successful authorized calls, TLS/proxy/origin matrix,
   guest-local storage and restart/recreation durability, full tests and
-  Docker build. Do not implement a weaker gate or publish before the machine
-  credential contract is resolved. T11 implements a scoped Broker-beat
-  verifier, but deployed MS07 identity, secret availability, and endpoint
-  origin remain unverified. Local client
+  Docker build. Do not weaken other Broker controls or publish before the
+  central endpoint is proven reachable and compatible. T11 implemented a
+  local HMAC verifier; the production app now uses the approved central
+  MS07 validator. Local client
   mapping found that CA04-GCO and CA05-GCC can use MS01-provided AGES URLs
   and send AGES user tokens or AGES API keys, but no Broker service key;
   whether their deployed URLs actually traverse CH09 is unverified. The
   former Broker gate would reject those clients if they did. The user has now
   clarified that AGES passthrough does not need a Broker key; T14 changes
-  only that boundary. Live client routing remains unverified.
+  only that boundary. Live client routing remains unverified. Local commits:
+  CH09 `3c32257` on `feat/broker-login-durable-timings-15-root-state` and MS07
+  `8404963` on `codex/ms07-broker-introspection`; neither is pushed or
+  deployed. Focused CH09 13/13 and MS07 6/6 tests plus both TypeScript checks
+  passed. Independent verifier found no candidate-caused security blocker but
+  classified T10 as partial: full CH09 suite is blocked by denied PEM fixtures,
+  and real HTTPS, Linux ownership, Compose first start, and recreation remain
+  unverified. Review: disabled/unmanaged.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
@@ -375,6 +383,11 @@ requested that this arbitrary retention cap be removed.
 
 ## Log
 
+- 2026-10-13 implementation: CH09 `3c32257` adds fail-closed central beat
+  validation and a private persistent fallback service key; MS07 `8404963`
+  adds the exact-token validation endpoint. Both are local work-unit commits.
+  Focused tests and typechecks passed. Independent read-only verification
+  kept T10 open pending NAGES deployment and unchanged-Compose guest runtime.
 - 2026-10-13 user approval: "si" to the proposal "¿Autorizás cambiar el
   contrato para que el Broker valide el beat consultando a MS07 en NAGES por
   HTTPS, sin secreto en cada ges01 y fallando cerrado si NAGES no responde?"
