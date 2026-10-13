@@ -111,13 +111,19 @@ requested that this arbitrary retention cap be removed.
   on the first page, separate from the 100-row SQLite cursor page; README
   documents this. Runtime: local synthetic tests; no remote activation.
   Review: disabled/unmanaged.
-- [ ] **T8 — Reclaim expired auth state.** Schedule bounded cleanup of
+- [x] **T8 — Reclaim expired auth state.** Schedule bounded cleanup of
   expired login-attempt entries and persisted sessions without affecting
   active sessions or requests. Route: delegated direct. Trigger: auth
   lifecycle and deterministic tests require multiple non-trivial files.
   Checks: focused cleanup/expiry tests, `npm run tsc`, `npm test`, Docker
-  build, and diff check. Add one reviewable PR after #15, linked to approved
-  login issue #6. Review: disabled/unmanaged.
+  build, and diff check. Commit `484e9d8fa0ea827504b263d00dc1e85a97d0ad20`
+  on PR #16 after #15, linked to approved login issue #6. Focused 8/8,
+  full 94/94 in an LF-preserving checkout, TypeScript, Docker build, diff
+  check, and GitHub CI passed. Independent read-only review found no code
+  blocker. The default Windows CRLF checkout fails one unrelated IIS script
+  literal-LF assertion; the exact #15 parent passes 92/92 in the same
+  LF-preserving setup. Runtime remains unverified. Review:
+  disabled/unmanaged.
 
 ## Mode, delivery, and progress
 
@@ -134,30 +140,31 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 1,950 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54;
-  generated `build` excluded). The published chain has draft tracker PR #8
-  (`feat/broker-login-durable-timings`) against `main` and seven cumulative
+  count: 2,051 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101; generated `build` excluded). The published chain has draft tracker PR #8
+  (`feat/broker-login-durable-timings`) against `main` and eight cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
   T1 PR #9 `907e60e` (398 authored lines), T2 PR #10 `6c1a20a` (375),
   T3 PR #11 `00bbb35` (317), T4 PR #12 `78b121c` (280),
   T5 PR #13 `a1ca563` (309), T6 PR #14 `5fcfa81` (217),
-  T7 PR #15 `64f31d9` (54). Each child targets its immediate predecessor;
-  the first targets the draft tracker. Generated
+  T7 PR #15 `64f31d9` (54), T8 PR #16 `484e9d8` (101). Each child targets
+  its immediate predecessor; the first targets the draft tracker. Generated
   `build/` files raise visible diff totals above 400 for T1/T2/T3/T5 but
   are excluded from authored budget. No size-only code reduction was made.
   Each PR links an approved issue and has exactly one matching `type:*` label.
-  All eight GitHub CI checks passed after moving the native dependency build
+  All nine GitHub CI checks passed after moving the native dependency build
   toolchain into T1; the resulting Dockerfile is unchanged at the final tip.
-- Progress: T1-T7 committed and locally checked. Two independent read-only
+- Progress: T1-T8 committed and locally checked. Two independent read-only
   reviews found a session-revocation bug, secret-bearing ordinary pool/route
   logs, and a live-timing regression. A local production dependency audit found the
   critical `proxy-addr` advisory, now patched. The feature-branch-chain is
-  pushed and linked PRs #8-#15 are open; the tracker remains draft. A further
-  read-only review found that expired login attempts and session rows have no
-  scheduled cleanup; T8 addresses this before release. Next: complete T8,
-  review all child PRs, and keep the tracker unmerged until release readiness
-  is proven. Pushing to `main` publishes Docker Hub `:latest`, which may be
+  pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
+  read-only review found that expired login attempts and session rows had no
+  scheduled cleanup; T8 corrected this in bounded sweeps. Next: obtain
+  external release-readiness evidence, and keep the tracker unmerged until
+  release readiness is proven. Pushing to `main` publishes Docker Hub
+  `:latest`, which may be
   activated by Watchtower; live consumer HTTPS/service-key compatibility and
   Watchtower scope are unverified.
   Unlimited on-disk history
