@@ -158,6 +158,40 @@ test("missing or weak inter-MS secret does not enable unsigned beat", async () =
   assert.equal(verifyMs07BeatBearer(undefined, interMsSecret), false);
 });
 
+test("central validation admits only the exact Broker beat and fails closed", async () => {
+  const calls = [];
+  const central = async authorization => {
+    calls.push(authorization);
+    if (authorization === "Bearer allowed.token.signature") return true;
+    if (authorization === "Bearer outage.token.signature") throw new Error("offline");
+    return false;
+  };
+  const centralAuth = createAuthHttp(auth, serviceKey, undefined, central);
+  const centralApp = express();
+  centralApp.set("trust proxy", "loopback");
+  centralApp.use(requireSecureTransport);
+  centralApp.use(centralAuth.gate);
+  centralApp.get("/foreign/broker/heartbeat/beat", (_req, res) => res.json({ status: "beat" }));
+  centralApp.get("/foreign/broker/health", (_req, res) => res.json({ status: "healthy" }));
+  const centralServer = createServer(centralApp);
+  await new Promise(resolve => centralServer.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${centralServer.address().port}`;
+  const ask = (path, token) => fetch(url + path, {
+    headers: { "X-Forwarded-Proto": "https", ...(token ? { Authorization: token } : {}) }
+  });
+  try {
+    assert.equal((await ask("/foreign/broker/heartbeat/beat", "Bearer allowed.token.signature")).status, 200);
+    assert.equal((await ask("/foreign/broker/heartbeat/beat", "Bearer denied.token.signature")).status, 401);
+    assert.equal((await ask("/foreign/broker/heartbeat/beat", "Bearer outage.token.signature")).status, 401);
+    assert.equal((await ask("/foreign/broker/heartbeat/beat")).status, 401);
+    assert.equal((await ask("/foreign/broker/health", "Bearer allowed.token.signature")).status, 401);
+    assert.deepEqual(calls, ["Bearer allowed.token.signature", "Bearer denied.token.signature",
+      "Bearer outage.token.signature"]);
+  } finally {
+    await new Promise(resolve => centralServer.close(resolve));
+  }
+});
+
 test("login session protects pages and CSRF protects mutation and logout", async () => {
   const redirect = await request("/foreign/broker/pool/show", { headers: { Accept: "text/html" } });
   assert.equal(redirect.status, 303);
