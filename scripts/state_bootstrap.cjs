@@ -17,6 +17,10 @@ function validateMount(mountPath, mountInfo) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(mountPath) !== mountPath) {
     throw new Error("Broker log mount must be a real directory");
   }
+  if (typeof process.getuid === "function" &&
+      (stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0)) {
+    throw new Error("Broker log mount is owned or writable by an untrusted user");
+  }
   const entries = mountInfo.split("\n").filter(Boolean).map(line => {
     const [left, right] = line.split(" - ");
     if (!right) throw new Error("Invalid mount information");
@@ -45,6 +49,9 @@ function bootstrapStatePaths(env = process.env, options = {}) {
   catch (error) { if (error.code !== "EEXIST") throw error; }
   const state = fs.lstatSync(directory);
   if (!state.isDirectory() || state.isSymbolicLink()) throw new Error("Broker state path must be a real directory");
+  if (typeof process.getuid === "function" && state.uid !== process.getuid()) {
+    throw new Error("Broker state directory is owned by another user");
+  }
   fs.chmodSync(directory, 0o700);
   const probe = path.join(directory, `.write-probe-${randomUUID()}`);
   const fd = fs.openSync(probe, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o600);

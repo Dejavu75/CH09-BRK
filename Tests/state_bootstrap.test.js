@@ -49,6 +49,23 @@ test("only two absent paths receive private defaults; explicit paths stay untouc
   if (process.platform !== "win32") assert.equal(fs.statSync(child).mode & 0o777, 0o700);
 });
 
+test("foreign-owned state and writable or foreign-owned log root fail closed", {
+  skip: typeof process.getuid !== "function" || process.getuid() !== 0
+}, t => {
+  const mountPath = fixture(t);
+  fs.mkdirSync(mountPath, { mode: 0o755 });
+  const child = path.join(mountPath, "broker-state");
+  fs.mkdirSync(child, { mode: 0o700 });
+  fs.chownSync(child, 12345, 12345);
+  assert.throws(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }), /owned by another user/);
+  fs.chownSync(child, process.getuid(), process.getgid());
+  fs.chmodSync(mountPath, 0o775);
+  assert.throws(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }), /untrusted user/);
+  fs.chmodSync(mountPath, 0o755);
+  fs.chownSync(mountPath, 12345, 12345);
+  assert.throws(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }), /untrusted user/);
+});
+
 test("default databases reopen and durable clear survives restart", t => {
   const mountPath = fixture(t);
   fs.mkdirSync(mountPath);
