@@ -136,12 +136,16 @@ requested that this arbitrary retention cap be removed.
   validation, tests, and documentation span multiple non-trivial files;
   preparation was delegated. TDD: unset; runner `npm test` and `npm run tsc`.
   RDD: clone-local disabled/unmanaged. Checks: absent/disallowed mount and
-  symlink rejection, private directory permissions, restart/reopen and
+  symlink rejection, private directory owner and permissions (including a
+  foreign-owned preexisting child), restart/reopen and
   durable clear with SQLite sidecars, explicit override compatibility,
   Docker image build, diff check. A short-syntax Compose bind can silently
   create an empty host directory; image checks cannot prove guest-local host
   backing or prevent host log rotation from deleting state. T10 remains open
-  until actual guest storage and recreation behavior are verified.
+  until actual guest storage and recreation behavior are verified. Review
+  found that chmod alone does not make a foreign-owned preexisting child
+  private; reject it before accepting the fallback. Newer Compose templates
+  still set both explicit DB paths and therefore never take this fallback.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
