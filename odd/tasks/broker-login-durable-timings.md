@@ -156,6 +156,23 @@ requested that this arbitrary retention cap be removed.
   unrelated pre-existing IIS CRLF failure, one root-only ownership test
   skipped on Windows and covered by the Docker check. Runtime backing,
   rotation, backup, and unchanged ges01 recreation remain T10 gates.
+- [ ] **T13 — Resolve the human login origin from verified HTTPS requests.**
+  Preserve the explicit `BROKER_PUBLIC_ORIGIN` policy when configured. When
+  absent, use the exact request Host authority (including external port)
+  only if the request is already considered HTTPS by the existing trusted
+  transport policy and the hostname matches a configured local certificate
+  identity. Never trust unanchored Host or `X-Forwarded-Host`, accept an
+  arbitrary Origin, or infer the external port from the container listener.
+  Fail closed if no trustworthy certificate/host is available. Route:
+  delegated direct. Trigger: auth service, HTTP integration, certificate
+  loading, tests, and docs span multiple non-trivial files; preparation was
+  delegated. TDD: unset; runner `npm test` and `npm run tsc`. RDD:
+  clone-local disabled/unmanaged. Checks: valid host with default/nondefault
+  public ports, mismatched host/origin, spoofed forwarded headers, wildcard
+  and unrelated certificates, TLS/proxy mode, explicit override regression,
+  full tests, Docker build, and diff check. Live proxy Host preservation and
+  certificate topology remain T10 runtime gates; this work unit must not
+  silently weaken CSRF or production transport checks.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
