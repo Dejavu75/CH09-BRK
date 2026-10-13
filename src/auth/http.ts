@@ -42,7 +42,9 @@ function sameKey(supplied: string | undefined, expected: string): boolean {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export function isMachineRoute(path: string): boolean {
+type BrokerRouteKind = "human" | "machine" | "ages-proxy";
+
+function brokerRouteKind(path: string): BrokerRouteKind {
   const normalized = path.toLowerCase();
   let route: string;
   if (normalized === "/ages" || normalized.startsWith("/ages/")) {
@@ -50,13 +52,17 @@ export function isMachineRoute(path: string): boolean {
   } else if (normalized === "/foreign/broker" || normalized.startsWith("/foreign/broker/")) {
     route = normalized.slice("/foreign/broker".length).replace(/^\//, "");
   } else {
-    return false;
+    return "human";
   }
-  if (!route) return false;
-  if (isHumanControlRoute(route)) return false;
-  if (route === "health" || route === "heartbeat" || route.startsWith("heartbeat/")) return true;
-  // The Broker router's final catch-all routes proxy arbitrary AGES functions.
-  return true;
+  if (!route || isHumanControlRoute(route)) return "human";
+  if (route === "health" || route.startsWith("health/") ||
+      route === "heartbeat" || route.startsWith("heartbeat/")) return "machine";
+  // Everything else reaches the Broker router's AGES proxy handlers.
+  return "ages-proxy";
+}
+
+export function isMachineRoute(path: string): boolean {
+  return brokerRouteKind(path) === "machine";
 }
 
 function isHumanControlRoute(route: string): boolean {
@@ -141,7 +147,12 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
   });
 
   const gate = (req: Request, res: Response, next: NextFunction): void => {
-    if (isMachineRoute(req.path)) {
+    const routeKind = brokerRouteKind(req.path);
+    if (routeKind === "ages-proxy") {
+      next();
+      return;
+    }
+    if (routeKind === "machine") {
       const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
       const signedBeat = scopedBeat && req.method === "GET" &&
         verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret);

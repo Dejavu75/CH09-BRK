@@ -42,24 +42,26 @@ directo al puerto interno. Si el certificado existe sólo en el proxy externo,
 configurar `BROKER_PUBLIC_ORIGIN` explícitamente. El certificado local se
 recarga al reiniciar el Broker. Generar
 `BROKER_SERVICE_API_KEY` como secreto aleatorio de al menos 32 bytes,
-guardarlo fuera de Git y enviarlo en `X-Broker-Service-Api-Key` desde cada
-consumidor automatizado de AGES y heartbeat. Alternativamente, sólo
+guardarlo fuera de Git y enviarlo en `X-Broker-Service-Api-Key` desde los
+consumidores automatizados de los controles del Broker, como health y heartbeat. Las
+llamadas que el Broker sólo retransmite a AGES no usan esta clave. Alternativamente, sólo
 `GET /foreign/broker/heartbeat/beat` acepta `Authorization: Bearer <token>`
 firmado por MS07 con HMAC-SHA256, issuer `solinges-ecosystem`, identidad
 firmada `MSCODE=MS07`, audiencia
 exacta `broker` y scope `broker:beat`. Esta opción requiere configurar
 `INTER_MS_AUTH_SECRET` en el Broker con el mismo secreto seguro (mínimo 32
 bytes) que el firmante MS07; sin él, el token se rechaza y continúa vigente
-la clave de servicio. No se aceptan tokens inter-MS en proxy AGES, health ni
-otras rutas, ni se registra el token o el secreto. Esto todavía no resuelve
+la clave de servicio. Los tokens inter-MS no conceden autoridad del Broker en
+el proxy AGES, health ni otras rutas; el proxy conserva los headers destinados
+a AGES sin registrar el token o el secreto. Esto todavía no resuelve
 la instalación sin configuración previa: falta una fuente segura compartida
-del secreto y validar los consumidores existentes. No reutilizar la clave de
-administración anterior. Antes de activar, actualizar los consumidores y
-verificar que sus peticiones autenticadas todavía llegan al upstream; de lo
-contrario la nueva compuerta devolverá 401.
+del secreto y validar los consumidores de controles del Broker. No reutilizar la
+clave de administración anterior. Antes de activar, verificar que las peticiones
+AGES conservan su autenticación al llegar al upstream y que los controles del
+Broker siguen rechazando clientes no autorizados.
 
-El challenge ACME es la única excepción HTTP. Login, sesión, páginas y rutas
-de máquina responden 403 por HTTP, sin redirección que pueda reenviar
+El challenge ACME es la única excepción HTTP. Login, sesión, páginas, controles
+de máquina y proxy AGES responden 403 por HTTP, sin redirección que pueda reenviar
 credenciales. Si producción publica solamente el puerto HTTP del contenedor,
 debe existir un terminador TLS confiable delante del Broker y su IP exacta
 debe estar en `BROKER_TRUSTED_PROXY_IPS`; ese proxy debe sobrescribir
@@ -68,9 +70,12 @@ el acceso directo de clientes al puerto interno. Sin TLS directo o ese proxy
 configurado, la instalación falla cerrada para todas las rutas protegidas.
 
 `/auth/login` ofrece el acceso humano. Las páginas de pool, timings y
-administración requieren sesión de navegador; los proxy endpoints `/ages`,
-`/foreign/broker/ages`, health y heartbeat requieren la clave de servicio,
-salvo la excepción de token MS07 para el beat exacto descrita arriba.
+administración requieren sesión de navegador. Las rutas de proxy AGES bajo
+`/ages` y `/foreign/broker` no exigen sesión ni clave del Broker: AGES decide
+su propia autorización y sus headers de credenciales se retransmiten. Los
+controles explícitos del Broker bajo ambos prefijos (`/pool`, `/iis`,
+`/ages-host`, `/health`, `/heartbeat`) mantienen sus respectivas compuertas;
+el beat exacto admite además el token firmado de MS07 descrito arriba.
 El challenge `/.well-known/acme-challenge` permanece público para ACME.
 Las sesiones usan cookie Secure/HttpOnly/SameSite=Strict, CSRF y una duración
 de 30 días: es una decisión más restrictiva que los 365 días observados en

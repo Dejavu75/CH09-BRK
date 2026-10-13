@@ -48,7 +48,7 @@ function sameKey(supplied, expected) {
     const wanted = Buffer.from(expected, "utf8");
     return actual.length === wanted.length && (0, node_crypto_1.timingSafeEqual)(actual, wanted);
 }
-function isMachineRoute(path) {
+function brokerRouteKind(path) {
     const normalized = path.toLowerCase();
     let route;
     if (normalized === "/ages" || normalized.startsWith("/ages/")) {
@@ -58,16 +58,18 @@ function isMachineRoute(path) {
         route = normalized.slice("/foreign/broker".length).replace(/^\//, "");
     }
     else {
-        return false;
+        return "human";
     }
-    if (!route)
-        return false;
-    if (isHumanControlRoute(route))
-        return false;
-    if (route === "health" || route === "heartbeat" || route.startsWith("heartbeat/"))
-        return true;
-    // The Broker router's final catch-all routes proxy arbitrary AGES functions.
-    return true;
+    if (!route || isHumanControlRoute(route))
+        return "human";
+    if (route === "health" || route.startsWith("health/") ||
+        route === "heartbeat" || route.startsWith("heartbeat/"))
+        return "machine";
+    // Everything else reaches the Broker router's AGES proxy handlers.
+    return "ages-proxy";
+}
+function isMachineRoute(path) {
+    return brokerRouteKind(path) === "machine";
 }
 function isHumanControlRoute(route) {
     return route === "pool" || route.startsWith("pool/") || route === "ages-host" ||
@@ -148,7 +150,12 @@ function createAuthHttp(auth, serviceKey, interMsSecret) {
     });
     const gate = (req, res, next) => {
         var _a;
-        if (isMachineRoute(req.path)) {
+        const routeKind = brokerRouteKind(req.path);
+        if (routeKind === "ages-proxy") {
+            next();
+            return;
+        }
+        if (routeKind === "machine") {
             const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
             const signedBeat = scopedBeat && req.method === "GET" &&
                 (0, interms_1.verifyMs07BeatBearer)(firstHeader(req.headers.authorization), interMsSecret);

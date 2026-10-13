@@ -137,7 +137,12 @@ for (const prefix of ["/ages", "/foreign/broker/ages"]) {
       });
       const upstreamUrl = await listen(upstream, t);
       const proxyUrl = await listen(createProxy(upstreamUrl), t);
-      const headers = { ...scenario.headers, AGES_USER: "test-user", AGES_PASS: "test-password" };
+      const headers = {
+        ...scenario.headers, AGES_USER: "test-user", AGES_PASS: "test-password",
+        Authorization: "Bearer synthetic-ages-token", "X-AGES-API-Key": "synthetic-ages-key",
+        "X-Broker-Service-Api-Key": "synthetic-broker-key",
+        Cookie: "AGES_SESSION=synthetic-ages-session; __Host-broker_session=synthetic-broker-session"
+      };
       const result = await request(`${proxyUrl}${prefix}/autorizar`, scenario.method ?? "POST", headers, scenario.body, scenario.noFraming);
       assert.equal(result.status, 200, result.body.toString());
       assert.deepEqual(observed.body, expected);
@@ -147,6 +152,10 @@ for (const prefix of ["/ages", "/foreign/broker/ages"]) {
       }
       assert.equal(observed.headers.ages_user, "test-user");
       assert.equal(observed.headers.ages_pass, "test-password");
+      assert.equal(observed.headers.authorization, "Bearer synthetic-ages-token");
+      assert.equal(observed.headers["x-ages-api-key"], "synthetic-ages-key");
+      assert.equal(observed.headers["x-broker-service-api-key"], undefined);
+      assert.equal(observed.headers.cookie, "AGES_SESSION=synthetic-ages-session");
     });
   }
 }
