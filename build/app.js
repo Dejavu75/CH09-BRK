@@ -65,7 +65,6 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
 app.use(http_2.requireSecureTransport);
 const auth = new auth_service_1.BrokerAuthService({
     publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
-    credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),
     databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
 });
 const authHttp = (0, http_2.createAuthHttp)(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));

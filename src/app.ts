@@ -33,7 +33,6 @@ app.use(
 app.use(requireSecureTransport);
 const auth = new BrokerAuthService({
   publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
-  credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),
   databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
 });
 const authHttp = createAuthHttp(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));

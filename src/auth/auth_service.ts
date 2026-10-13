@@ -7,7 +7,7 @@ const CLEANUP_BATCH_SIZE = 1_000;
 
 export type AuthConfig = {
   publicOrigin: string;
-  credentialFile: string;
+  credentialFile?: string;
   databaseFile: string;
   sessionTtlSeconds?: number;
   loginLimit?: number;

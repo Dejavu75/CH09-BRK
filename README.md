@@ -24,28 +24,9 @@ npm run build
 
 ## Login y estado persistente
 
-El Broker requiere configuración explícita antes de arrancar. En las tres
-plantillas Compose, `BROKER_AUTH_HTPASSWD_HOST_PATH` debe señalar el **mismo
-archivo htpasswd de BackGES**, montado en solo lectura; no se genera otro
-usuario ni se copia el archivo al repositorio. El archivo debe estar en el
-disco local del guest `ges01`, bajo `/srv/solinges`. Si BackGES usa hoy una
-ruta del host físico o un montaje compartido, primero hace falta una migración
-coordinada y autorizada: no se debe apuntar Broker a `/mnt`, `/media`, SMB,
-NFS, 9p, drvfs ni al host Hyper-V. Verificar la ruta real de BackGES antes de
-asignar esta variable; no hay un valor universal para su instalación.
+La imagen incluye dos cuentas generales de Broker: `guillermo.negrete` y `diego.zacur`. Sus contraseñas no se documentan ni se incluyen en texto plano en la imagen; el Broker verifica hashes bcrypt. BackGES no se modifica ni se usa como fuente de usuarios. No hace falta crear ni montar un archivo htpasswd al instalar el Broker. Las cuentas son iguales en todas las instalaciones, de modo que deben tratarse como credenciales compartidas entre empresas.
 
-`BROKER_STATE_HOST_PATH` debe ser un directorio persistente y privado del
-mismo guest, por ejemplo `/srv/solinges/ecosystem/ch09-brk/state` (modo 0700).
-Los archivos `sessions.sqlite` y `timings.sqlite` viven allí; conservar el
-directorio entero, incluidos los posibles archivos SQLite WAL/SHM, al recrear
-el contenedor. Los bind mounts usan `create_host_path: false` para impedir
-que Docker cree silenciosamente un archivo o directorio equivocado. En una
-instalación no Compose, configurar también las rutas internas
-`BROKER_AUTH_HTPASSWD_PATH`, `BROKER_AUTH_DB_PATH` y
-`BROKER_TIMINGS_DB_PATH`. La ausencia del archivo de usuarios, origen HTTPS,
-clave de servicio o estado escribible impide el arranque. Los usuarios se leen
-al iniciar el proceso: reiniciar Broker después de cambiar el htpasswd de
-BackGES para incorporar altas o bajas.
+`BROKER_STATE_HOST_PATH` debe ser un directorio persistente y privado del guest `ges01`, por ejemplo `/srv/solinges/ecosystem/ch09-brk/state` (modo 0700). Los archivos `sessions.sqlite` y `timings.sqlite` viven allí; conservar el directorio entero, incluidos los posibles archivos SQLite WAL/SHM, al recrear el contenedor. El bind mount usa `create_host_path: false` para impedir que Docker cree silenciosamente un directorio equivocado. En una instalación no Compose, configurar las rutas internas `BROKER_AUTH_DB_PATH` y `BROKER_TIMINGS_DB_PATH`. La ausencia del origen HTTPS, clave de servicio o estado escribible impide el arranque.
 
 Configurar `BROKER_PUBLIC_ORIGIN` con el origen HTTPS exacto que usa el
 navegador (esquema, host y puerto si corresponde, sin barra final). Generar
@@ -71,8 +52,7 @@ administración requieren sesión de navegador; los proxy endpoints `/ages`,
 El challenge `/.well-known/acme-challenge` permanece público para ACME.
 Las sesiones usan cookie Secure/HttpOnly/SameSite=Strict, CSRF y una duración
 de 30 días: es una decisión más restrictiva que los 365 días observados en
-el runtime actual de BackGES. La identidad de usuarios se comparte, no la
-sesión: esto **no es SSO**. La vista de timings ahora omite cuerpos,
+el runtime actual de BackGES. Las cuentas son propias del Broker y no comparten sesión con BackGES: esto **no es SSO**. La vista de timings ahora omite cuerpos,
 parámetros de URL y headers no aprobados antes de mostrar o persistir datos.
 El historial de timings no elimina registros por cantidad: queda en SQLite
 hasta que un operador use **Limpiar**. `GET /foreign/broker/pool/timings`
