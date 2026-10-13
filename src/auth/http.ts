@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextFunction, Request, RequestHandler, Response, Router, json, urlencoded } from "express";
 
 import { BrokerAuthService } from "./auth_service";
+import { verifyMs07BeatBearer } from "./interms";
 
 export const SERVICE_KEY_HEADER = "x-broker-service-api-key";
 
@@ -64,7 +65,7 @@ function isStateChangingGet(path: string): boolean {
     "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
 }
 
-export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
+export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, interMsSecret?: string): {
   routes: Router;
   gate: RequestHandler;
 } {
@@ -128,7 +129,10 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
 
   const gate = (req: Request, res: Response, next: NextFunction): void => {
     if (isMachineRoute(req.path)) {
-      if (!sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey)) {
+      const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
+      const signedBeat = scopedBeat && req.method === "GET" &&
+        verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret);
+      if (!sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey) && !signedBeat) {
         res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
         return;
       }

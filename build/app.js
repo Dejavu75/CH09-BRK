@@ -67,7 +67,7 @@ const auth = new auth_service_1.BrokerAuthService({
     publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
     databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
 });
-const authHttp = (0, http_2.createAuthHttp)(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));
+const authHttp = (0, http_2.createAuthHttp)(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"), process.env.INTER_MS_AUTH_SECRET);
 app.use("/auth", authHttp.routes);
 app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: () => true, limit: requestBodyLimit }));

@@ -32,7 +32,17 @@ Configurar `BROKER_PUBLIC_ORIGIN` con el origen HTTPS exacto que usa el
 navegador (esquema, host y puerto si corresponde, sin barra final). Generar
 `BROKER_SERVICE_API_KEY` como secreto aleatorio de al menos 32 bytes,
 guardarlo fuera de Git y enviarlo en `X-Broker-Service-Api-Key` desde cada
-consumidor automatizado de AGES y heartbeat. No reutilizar la clave de
+consumidor automatizado de AGES y heartbeat. Alternativamente, sólo
+`GET /foreign/broker/heartbeat/beat` acepta `Authorization: Bearer <token>`
+firmado por MS07 con HMAC-SHA256, issuer `solinges-ecosystem`, identidad
+firmada `MSCODE=MS07`, audiencia
+exacta `broker` y scope `broker:beat`. Esta opción requiere configurar
+`INTER_MS_AUTH_SECRET` en el Broker con el mismo secreto seguro (mínimo 32
+bytes) que el firmante MS07; sin él, el token se rechaza y continúa vigente
+la clave de servicio. No se aceptan tokens inter-MS en proxy AGES, health ni
+otras rutas, ni se registra el token o el secreto. Esto todavía no resuelve
+la instalación sin configuración previa: falta una fuente segura compartida
+del secreto y validar los consumidores existentes. No reutilizar la clave de
 administración anterior. Antes de activar, actualizar los consumidores y
 verificar que sus peticiones autenticadas todavía llegan al upstream; de lo
 contrario la nueva compuerta devolverá 401.
@@ -48,7 +58,8 @@ configurado, la instalación falla cerrada para todas las rutas protegidas.
 
 `/auth/login` ofrece el acceso humano. Las páginas de pool, timings y
 administración requieren sesión de navegador; los proxy endpoints `/ages`,
-`/foreign/broker/ages`, health y heartbeat requieren la clave de servicio.
+`/foreign/broker/ages`, health y heartbeat requieren la clave de servicio,
+salvo la excepción de token MS07 para el beat exacto descrita arriba.
 El challenge `/.well-known/acme-challenge` permanece público para ACME.
 Las sesiones usan cookie Secure/HttpOnly/SameSite=Strict, CSRF y una duración
 de 30 días: es una decisión más restrictiva que los 365 días observados en

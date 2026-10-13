@@ -3,6 +3,7 @@ const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { createServer } = require("node:http");
+const { createHmac } = require("node:crypto");
 const { after, test } = require("node:test");
 const express = require("express");
 const bcrypt = require("bcryptjs");
@@ -15,9 +16,10 @@ const users = join(directory, "users.htpasswd");
 const database = join(directory, "sessions.sqlite");
 const origin = "https://broker.synthetic";
 const serviceKey = "synthetic-machine-key-with-at-least-32-bytes";
+const interMsSecret = "synthetic-inter-ms-secret-with-at-least-32-bytes";
 writeFileSync(users, `operator:${bcrypt.hashSync("synthetic-password", 4)}\n`);
 const auth = new BrokerAuthService({ publicOrigin: origin, credentialFile: users, databaseFile: database });
-const { routes, gate } = createAuthHttp(auth, serviceKey);
+const { routes, gate } = createAuthHttp(auth, serviceKey, interMsSecret);
 const app = express();
 app.use("/auth", routes);
 app.use(gate);
@@ -70,6 +72,51 @@ test("denies machine calls without separate credential and denies session as sub
   assert.equal((await request("/foreign/broker/pool/show", { headers: { [SERVICE_KEY_HEADER]: serviceKey } })).status, 401);
   assert.equal((await request("/ages/pool/show", { headers: { [SERVICE_KEY_HEADER]: serviceKey } })).status, 401);
   assert.equal((await request("/ages/iis/restart", { headers: { [SERVICE_KEY_HEADER]: serviceKey } })).status, 401);
+});
+
+// Mirrors the se_configbase HS256 signer fields and base64url wire format.
+function signedBeat(overrides = {}, signingSecret = interMsSecret) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: "solinges-ecosystem", sub: "MS07/UNICA", aud: "broker",
+    scope: ["broker:beat", "ms:call"], mscode: "MS07", instance: "UNICA",
+    serviceType: "monitor", url: "https://ms07.synthetic", iat: now, exp: now + 300,
+    ...overrides
+  };
+  const unsigned = [JSON.stringify({ alg: "HS256", typ: "JWT" }), JSON.stringify(payload)]
+    .map(value => Buffer.from(value).toString("base64url")).join(".");
+  const signature = createHmac("sha256", signingSecret).update(unsigned).digest("base64url");
+  return `${unsigned}.${signature}`;
+}
+
+test("accepts only signed, scoped MS07 beats on the exact route", async () => {
+  const beat = "/foreign/broker/heartbeat/beat";
+  const bearer = token => ({ Authorization: `Bearer ${token}` });
+  assert.equal((await request(beat, { headers: bearer(signedBeat()) })).status, 200);
+  assert.equal((await request(beat, { method: "POST", headers: bearer(signedBeat()) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ aud: "solinges-ecosystem" })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ scope: ["ms:call"] })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ iss: "other" })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ mscode: "MS08" })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ sub: "MS08/UNICA" })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ exp: 1 })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({ iat: Math.floor(Date.now() / 1000) + 120 })) })).status, 401);
+  assert.equal((await request(beat, { headers: bearer(signedBeat({}, "different-signing-secret-with-at-least-32-bytes")) })).status, 401);
+  const tampered = signedBeat().split(".");
+  tampered[1] = Buffer.from(JSON.stringify({ aud: "broker", mscode: "MS07" })).toString("base64url");
+  assert.equal((await request(beat, { headers: bearer(tampered.join(".")) })).status, 401);
+  assert.equal((await request("/foreign/broker/heartbeat", { headers: bearer(signedBeat()) })).status, 401);
+  assert.equal((await request("/foreign/broker/health", { headers: bearer(signedBeat()) })).status, 401);
+  assert.equal((await request("/ages/autorizar", { headers: bearer(signedBeat()) })).status, 401);
+  assert.equal((await request(beat, { headers: { "X-Inter-MS-Token": signedBeat() } })).status, 401);
+  assert.equal((await request(beat, { headers: { "X-AGES-API-Key": `interms:${signedBeat()}` } })).status, 401);
+});
+
+test("missing or weak inter-MS secret does not enable unsigned beat", async () => {
+  const { verifyMs07BeatBearer } = require("../build/auth/interms");
+  assert.equal(verifyMs07BeatBearer(`Bearer ${signedBeat()}`, undefined), false);
+  assert.equal(verifyMs07BeatBearer(`Bearer ${signedBeat()}`, "weak"), false);
+  assert.equal(verifyMs07BeatBearer(undefined, interMsSecret), false);
 });
 
 test("login session protects pages and CSRF protects mutation and logout", async () => {
