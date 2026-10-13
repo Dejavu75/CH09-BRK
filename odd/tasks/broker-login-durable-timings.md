@@ -107,8 +107,9 @@ requested that this arbitrary retention cap be removed.
   whether their deployed URLs actually traverse CH09 is unverified. The
   former Broker gate would reject those clients if they did. The user has now
   clarified that AGES passthrough does not need a Broker key; T14 changes
-  only that boundary. Live client routing remains unverified. CH09 commit
-  `3c32257` remains local and undeployed. MS07 identity fix `4dc088e` is the
+  only that boundary. Live client routing remains unverified. Corrected CH09
+  cumulative tip `47d5b17` is published in PR #23 and remains undeployed.
+  MS07 identity fix `4dc088e` is the
   clean local tip of `codex/ms07-broker-introspection`; its image was published
   as `dhzacur/se_ms07_doc:broker-introspection-4dc088e` with registry digest
   `sha256:678c9495b5f9d90d7432bb771b6073ad1371acbbdf917f046079e46b259e467f`.
@@ -196,9 +197,11 @@ requested that this arbitrary retention cap be removed.
   verifier found no blocker within the accepted trusted-operator model. The
   full Windows suite reported 102 passed, 7 failed, 1 skipped in the restricted
   sandbox; symlink creation and certificate fixture access are unavailable.
-  Docker and WSL are also denied locally. This task remains open pending a
-  clean Linux/full-suite check and unchanged-Compose runtime evidence. No
-  remote files or containers were changed.
+  Docker and WSL are also denied locally. A later fresh verifier passed the
+  Linux ownership/symlink/service-key checks 7/7, and the corrected cumulative
+  Windows suite passed 112 with one platform-specific root-only skip. This
+  task remains open pending unchanged-Compose runtime evidence on the actual
+  CH09 guest. No remote files or containers were changed.
 - [x] **T13 — Resolve the human login origin from verified HTTPS requests.**
   Preserve the explicit `BROKER_PUBLIC_ORIGIN` policy when configured. When
   absent, use the exact request Host authority (including external port)
@@ -354,20 +357,26 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 2,893 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
-  T8 101, T9 101, T11 122, T12 184, T13 232, T14 201, IIS test follow-up 2; generated `build` and certificate fixtures excluded). The published chain has draft tracker PR #8
-  (`feat/broker-login-durable-timings`) against `main` and eight cumulative
+  count: 3,224 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101, T9 101, T11 122, T12 184, T13 232, T14 203, root-state 52,
+  central MS07 validation and correction 279; generated `build` and certificate
+  fixtures excluded). The published chain has draft tracker PR #8
+  (`feat/broker-login-durable-timings`) against `main` and fifteen cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
   T1 PR #9 `907e60e` (398 authored lines), T2 PR #10 `6c1a20a` (375),
   T3 PR #11 `00bbb35` (317), T4 PR #12 `78b121c` (280),
   T5 PR #13 `a1ca563` (309), T6 PR #14 `5fcfa81` (217),
-  T7 PR #15 `64f31d9` (54), T8 PR #16 `484e9d8` (101). Each child targets
+  T7 PR #15 `64f31d9` (54), T8 PR #16 `484e9d8` (101),
+  T9 PR #17 `209d0e4` (101), T11 PR #18 `05eb9c0` (122),
+  T12 PR #19 `575ad74` (184), T13 PR #20 `a2987a2` (232),
+  T14 PR #21 `3c7d14a` (203), root-state PR #22 `7b47394` (52), and
+  central MS07 validation PR #23 `47d5b17` (279). Each child targets
   its immediate predecessor; the first targets the draft tracker. Generated
   `build/` files raise visible diff totals above 400 for T1/T2/T3/T5 but
   are excluded from authored budget. No size-only code reduction was made.
   Each PR links an approved issue and has exactly one matching `type:*` label.
-  All nine GitHub CI checks passed after moving the native dependency build
+  All sixteen GitHub CI checks passed after moving the native dependency build
   toolchain into T1; the resulting Dockerfile is unchanged at the final tip.
 - Progress: T1-T8 committed and locally checked. Two independent read-only
   reviews found a session-revocation bug, secret-bearing ordinary pool/route
@@ -375,12 +384,15 @@ requested that this arbitrary retention cap be removed.
   critical `proxy-addr` advisory, now patched. The feature-branch-chain is
   pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
   read-only review found that expired login attempts and session rows had no
-  scheduled cleanup; T8 corrected this in bounded sweeps. T9 is committed
-  locally but not published; T11-T14 are locally checked and unpushed;
-  T10 remains open for image-only initialization.
-  Next: resolve the machine-client authentication contract and external
-  origin before claiming automatic deployment; keep the tracker unmerged until
-  release readiness is proven. Pushing to `main` publishes Docker Hub
+  scheduled cleanup; T8 corrected this in bounded sweeps. T9 and T11-T14 plus
+  the root-state and central-validation follow-ups are published as clean
+  chained PRs #17-#23; every CI check passed. T10 remains open for image-only
+  runtime acceptance. Fresh read-only NAGES inspection found no CH09-BRK
+  container or image and no `/srv/solinges`; NAGES is therefore not the CH09
+  runtime target without a separate topology/storage decision.
+  Next: identify and authorize the actual CH09 guest before claiming automatic
+  deployment; keep the tracker unmerged until release readiness is proven.
+  Pushing to `main` publishes Docker Hub
   `:latest`, which may be
   activated by Watchtower; live consumer HTTPS/service-key compatibility and
   Watchtower scope are unverified.
@@ -432,3 +444,19 @@ requested that this arbitrary retention cap be removed.
   `d2656349301784b73d7af5bf749c08e2c9a6232105ade1e6e485e693a7e3ac6e`.
   The first attempt's failure cause remains unknown; readiness timing is an
   inference only. CH09 was not deployed and T10 remains open.
+- 2026-10-13 CH09 publication preflight: the user explicitly authorized
+  read-only `ssh nages`. Current inspection confirmed MS07 still runs
+  `broker-introspection-4dc088e` with restart count zero and the verified
+  Compose SHA-256. NAGES has no CH09-BRK container or image, only CH09-COU,
+  and `/srv/solinges` is absent. No remote file, container, or Watchtower
+  mutation occurred.
+- 2026-10-13 correction and publication: independent verification found that
+  `3c32257` had not updated the production-wiring VM dependency map and loaded
+  the generated Broker service key before the session store privatized a fresh
+  explicit state directory. Commit `47d5b17` adds the missing harness bindings,
+  asserts startup order, and initializes auth state before loading the key.
+  RED reproduced 18/18 proxy failures; GREEN passed focused 22/22, the full
+  Windows suite 112/112 with one platform skip, Docker build, and independent
+  blocker recheck. Chained PRs #17-#23 are open, mergeable, each has one
+  matching `type:*` label, and every GitHub CI check passed. No CH09 merge or
+  deployment occurred.
