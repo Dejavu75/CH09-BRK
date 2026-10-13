@@ -218,7 +218,9 @@ requested that this arbitrary retention cap be removed.
   check passed. Full Windows suite: 105 pass, one pre-existing unrelated IIS
   CRLF assertion failure, one Windows ownership test skipped. No remote
   runtime, upstream AGES authorization, or deployment claimed. Review:
-  disabled/unmanaged.
+  disabled/unmanaged. Follow-up local test-only commit `3c7d14a` makes the
+  IIS assertion accept LF and CRLF; focused IIS tests passed 6/6 and the full
+  Windows suite now passes 106/107 with one root-only test skipped.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -318,8 +320,8 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 2,891 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
-  T8 101, T9 101, T11 122, T12 184, T13 232, T14 201; generated `build` and certificate fixtures excluded). The published chain has draft tracker PR #8
+  count: 2,893 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101, T9 101, T11 122, T12 184, T13 232, T14 201, IIS test follow-up 2; generated `build` and certificate fixtures excluded). The published chain has draft tracker PR #8
   (`feat/broker-login-durable-timings`) against `main` and eight cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
