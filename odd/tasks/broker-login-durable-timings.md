@@ -111,6 +111,13 @@ requested that this arbitrary retention cap be removed.
   on the first page, separate from the 100-row SQLite cursor page; README
   documents this. Runtime: local synthetic tests; no remote activation.
   Review: disabled/unmanaged.
+- [ ] **T8 — Reclaim expired auth state.** Schedule bounded cleanup of
+  expired login-attempt entries and persisted sessions without affecting
+  active sessions or requests. Route: delegated direct. Trigger: auth
+  lifecycle and deterministic tests require multiple non-trivial files.
+  Checks: focused cleanup/expiry tests, `npm run tsc`, `npm test`, Docker
+  build, and diff check. Add one reviewable PR after #15, linked to approved
+  login issue #6. Review: disabled/unmanaged.
 
 ## Mode, delivery, and progress
 
@@ -146,9 +153,13 @@ requested that this arbitrary retention cap be removed.
   reviews found a session-revocation bug, secret-bearing ordinary pool/route
   logs, and a live-timing regression. A local production dependency audit found the
   critical `proxy-addr` advisory, now patched. The feature-branch-chain is
-  pushed and linked PRs #8-#15 are open; the tracker remains draft. Next:
-  human review and integration in dependency order; do not merge the tracker
-  first.
+  pushed and linked PRs #8-#15 are open; the tracker remains draft. A further
+  read-only review found that expired login attempts and session rows have no
+  scheduled cleanup; T8 addresses this before release. Next: complete T8,
+  review all child PRs, and keep the tracker unmerged until release readiness
+  is proven. Pushing to `main` publishes Docker Hub `:latest`, which may be
+  activated by Watchtower; live consumer HTTPS/service-key compatibility and
+  Watchtower scope are unverified.
   Unlimited on-disk history
   requires operator disk monitoring and backup; clearing remains manual.
   Activation still requires verifying the actual BackGES htpasswd host path,
