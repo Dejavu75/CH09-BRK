@@ -172,6 +172,16 @@ requested that this arbitrary retention cap be removed.
   exact local writable mount, no group/world write, private root-owned child,
   and foreign-owned child rejection; cover the accepted owner mismatch and
   the previously rejected unsafe cases before closing this follow-up.
+  Local follow-up commit `b66b530` on
+  `feat/broker-login-durable-timings-15-root-state` accepts an operator-owned
+  exact local mount when the container runs as root. A deterministic mocked-root
+  test passed 1/1 after an observed RED; TypeScript passed and an independent
+  verifier found no blocker within the accepted trusted-operator model. The
+  full Windows suite reported 102 passed, 7 failed, 1 skipped in the restricted
+  sandbox; symlink creation and certificate fixture access are unavailable.
+  Docker and WSL are also denied locally. This task remains open pending a
+  clean Linux/full-suite check and unchanged-Compose runtime evidence. No
+  remote files or containers were changed.
 - [x] **T13 — Resolve the human login origin from verified HTTPS requests.**
   Preserve the explicit `BROKER_PUBLIC_ORIGIN` policy when configured. When
   absent, use the exact request Host authority (including external port)
@@ -369,3 +379,7 @@ requested that this arbitrary retention cap be removed.
   image for Lecar's uid-1000-owned guest-local log volume without changing
   ges01. The root container may trust the volume owner, but the owner can
   replace entries in that parent directory; this is an explicit trust boundary.
+- 2026-10-13 implementation: `b66b530` changes only the root-run mount owner
+  policy and its tests. The primary checkout cannot switch branches because
+  its restricted sandbox denies stat of two changed certificate fixtures;
+  this tracker update used an isolated sparse documentation worktree.
