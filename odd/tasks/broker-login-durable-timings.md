@@ -104,7 +104,12 @@ requested that this arbitrary retention cap be removed.
   and the Broker image can safely share as inbound Broker authority;
   `AGES_API_KEY` is outbound, and merely forwarding `X-AGES-API-Key` is not
   a Broker authorization gate. An explicit machine-client/deployment contract
-  is still required before this acceptance criterion can close.
+  is still required before this acceptance criterion can close. Local client
+  mapping found that CA04-GCO and CA05-GCC can use MS01-provided AGES URLs
+  and send AGES user tokens or AGES API keys, but no Broker service key;
+  whether their deployed URLs actually traverse CH09 is unverified. The
+  current Broker gate would reject those clients if they do. Confirm the
+  intended client route before changing other products or weakening the gate.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
