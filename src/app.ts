@@ -31,8 +31,10 @@ app.use(
   })
 );
 app.use(requireSecureTransport);
+const sslConfig = getSslConfig();
 const auth = new BrokerAuthService({
-  publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
+  publicOrigin: process.env.BROKER_PUBLIC_ORIGIN?.trim() || undefined,
+  certificatePem: sslConfig.ready ? readFileSync(sslConfig.certPath) : undefined,
   databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
 });
 const authHttp = createAuthHttp(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"), process.env.INTER_MS_AUTH_SECRET);
@@ -74,8 +76,6 @@ httpServer.listen(config.port, () => {
     agesConnectionPool.startPingMonitor();
   });
 });
-
-const sslConfig = getSslConfig();
 
 if (sslConfig.ready) {
   const httpsServer = https.createServer(

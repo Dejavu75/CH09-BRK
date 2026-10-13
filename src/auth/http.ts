@@ -30,6 +30,11 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? undefined : value;
 }
 
+function requestHost(req: Request): string | undefined {
+  const hostHeaders = req.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === "host");
+  return hostHeaders.length === 1 ? firstHeader(req.headers.host) : undefined;
+}
+
 function sameKey(supplied: string | undefined, expected: string): boolean {
   if (!supplied) return false;
   const actual = Buffer.from(supplied, "utf8");
@@ -75,6 +80,10 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
 
   const routes = Router();
   routes.use(json({ limit: "8kb" }), urlencoded({ extended: false, limit: "8kb" }));
+  routes.use((req, res, next) => {
+    if (auth.expectedOrigin(requestHost(req), req.secure)) return next();
+    res.status(403).set("Cache-Control", "no-store").json({ error: "Forbidden" });
+  });
 
   routes.get("/login", (req, res) => {
     const next = safeNext(req.query.next);
@@ -91,7 +100,9 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
       username: req.body?.username,
       password: req.body?.password,
       clientKey: req.ip || req.socket.remoteAddress || "unknown",
-      origin: req.get("origin")
+      origin: req.get("origin"),
+      host: requestHost(req),
+      secure: req.secure
     });
     res.set("Cache-Control", "no-store");
     if (result.retryAfterSeconds) res.set("Retry-After", String(result.retryAfterSeconds));
@@ -120,6 +131,8 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
     const result = auth.logout({
       cookieHeader: req.headers.cookie,
       origin: req.get("origin"),
+      host: requestHost(req),
+      secure: req.secure,
       csrfToken: firstHeader(req.headers["x-csrf-token"]) ?? req.body?.csrfToken
     });
     res.set("Cache-Control", "no-store");
@@ -139,11 +152,18 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
       next();
       return;
     }
+    const expectedOrigin = auth.expectedOrigin(requestHost(req), req.secure);
+    if (!expectedOrigin) {
+      res.status(403).set("Cache-Control", "no-store").json({ error: "Forbidden" });
+      return;
+    }
     const result = auth.verify({
       cookieHeader: req.headers.cookie,
       // Legacy GET aliases restart IIS; they must not bypass origin/CSRF checks.
       method: ["GET", "HEAD"].includes(req.method) && isStateChangingGet(req.path) ? "POST" : req.method,
       origin: req.get("origin"),
+      host: requestHost(req),
+      secure: req.secure,
       csrfToken: firstHeader(req.headers["x-csrf-token"])
     });
     if (result.setCookie) res.set("Set-Cookie", result.setCookie);

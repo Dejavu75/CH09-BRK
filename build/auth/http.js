@@ -37,6 +37,10 @@ function escapeHtml(value) {
 function firstHeader(value) {
     return Array.isArray(value) ? undefined : value;
 }
+function requestHost(req) {
+    const hostHeaders = req.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === "host");
+    return hostHeaders.length === 1 ? firstHeader(req.headers.host) : undefined;
+}
 function sameKey(supplied, expected) {
     if (!supplied)
         return false;
@@ -80,6 +84,11 @@ function createAuthHttp(auth, serviceKey, interMsSecret) {
     }
     const routes = (0, express_1.Router)();
     routes.use((0, express_1.json)({ limit: "8kb" }), (0, express_1.urlencoded)({ extended: false, limit: "8kb" }));
+    routes.use((req, res, next) => {
+        if (auth.expectedOrigin(requestHost(req), req.secure))
+            return next();
+        res.status(403).set("Cache-Control", "no-store").json({ error: "Forbidden" });
+    });
     routes.get("/login", (req, res) => {
         const next = safeNext(req.query.next);
         res.set({
@@ -95,7 +104,9 @@ function createAuthHttp(auth, serviceKey, interMsSecret) {
             username: (_a = req.body) === null || _a === void 0 ? void 0 : _a.username,
             password: (_b = req.body) === null || _b === void 0 ? void 0 : _b.password,
             clientKey: req.ip || req.socket.remoteAddress || "unknown",
-            origin: req.get("origin")
+            origin: req.get("origin"),
+            host: requestHost(req),
+            secure: req.secure
         });
         res.set("Cache-Control", "no-store");
         if (result.retryAfterSeconds)
@@ -126,6 +137,8 @@ function createAuthHttp(auth, serviceKey, interMsSecret) {
         const result = auth.logout({
             cookieHeader: req.headers.cookie,
             origin: req.get("origin"),
+            host: requestHost(req),
+            secure: req.secure,
             csrfToken: (_a = firstHeader(req.headers["x-csrf-token"])) !== null && _a !== void 0 ? _a : (_b = req.body) === null || _b === void 0 ? void 0 : _b.csrfToken
         });
         res.set("Cache-Control", "no-store");
@@ -146,11 +159,18 @@ function createAuthHttp(auth, serviceKey, interMsSecret) {
             next();
             return;
         }
+        const expectedOrigin = auth.expectedOrigin(requestHost(req), req.secure);
+        if (!expectedOrigin) {
+            res.status(403).set("Cache-Control", "no-store").json({ error: "Forbidden" });
+            return;
+        }
         const result = auth.verify({
             cookieHeader: req.headers.cookie,
             // Legacy GET aliases restart IIS; they must not bypass origin/CSRF checks.
             method: ["GET", "HEAD"].includes(req.method) && isStateChangingGet(req.path) ? "POST" : req.method,
             origin: req.get("origin"),
+            host: requestHost(req),
+            secure: req.secure,
             csrfToken: firstHeader(req.headers["x-csrf-token"])
         });
         if (result.setCookie)

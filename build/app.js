@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a, _b, _c;
+var _a, _b, _c, _d;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importStar(require("express"));
 const fs_1 = require("fs");
@@ -63,8 +63,10 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
     fallthrough: false
 }));
 app.use(http_2.requireSecureTransport);
+const sslConfig = getSslConfig();
 const auth = new auth_service_1.BrokerAuthService({
-    publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
+    publicOrigin: ((_d = process.env.BROKER_PUBLIC_ORIGIN) === null || _d === void 0 ? void 0 : _d.trim()) || undefined,
+    certificatePem: sslConfig.ready ? (0, fs_1.readFileSync)(sslConfig.certPath) : undefined,
     databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
 });
 const authHttp = (0, http_2.createAuthHttp)(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"), process.env.INTER_MS_AUTH_SECRET);
@@ -99,7 +101,6 @@ httpServer.listen(config.port, () => {
         ages_pool_1.agesConnectionPool.startPingMonitor();
     });
 });
-const sslConfig = getSslConfig();
 if (sslConfig.ready) {
     const httpsServer = https_1.default.createServer({
         cert: (0, fs_1.readFileSync)(sslConfig.certPath),
