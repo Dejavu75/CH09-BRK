@@ -44,7 +44,7 @@ function sameKey(supplied: string | undefined, expected: string): boolean {
 
 type BrokerRouteKind = "human" | "machine" | "ages-proxy";
 
-function brokerRouteKind(path: string): BrokerRouteKind {
+function brokerRouteKind(path: string, method: string): BrokerRouteKind {
   const normalized = path.toLowerCase();
   let route: string;
   if (normalized === "/ages" || normalized.startsWith("/ages/")) {
@@ -54,24 +54,31 @@ function brokerRouteKind(path: string): BrokerRouteKind {
   } else {
     return "human";
   }
-  if (!route || isHumanControlRoute(route)) return "human";
-  if (route === "health" || route.startsWith("health/") ||
-      route === "heartbeat" || route.startsWith("heartbeat/")) return "machine";
+  // Express accepts one optional trailing slash on registered routes.
+  const exactRoute = route.endsWith("/") ? route.slice(0, -1) : route;
+  if (!route || isHumanControlRoute(exactRoute, method)) return "human";
+  if ((exactRoute === "health" && ["GET", "HEAD"].includes(method)) ||
+      exactRoute === "heartbeat" || exactRoute === "heartbeat/beat") return "machine";
   // Everything else reaches the Broker router's AGES proxy handlers.
   return "ages-proxy";
 }
 
-export function isMachineRoute(path: string): boolean {
-  return brokerRouteKind(path) === "machine";
+export function isMachineRoute(path: string, method = "GET"): boolean {
+  return brokerRouteKind(path, method) === "machine";
 }
 
-function isHumanControlRoute(route: string): boolean {
-  return route === "pool" || route.startsWith("pool/") || route === "ages-host" ||
-    route.startsWith("ages-host/") || route === "iis" || route.startsWith("iis/");
+function isHumanControlRoute(route: string, method: string): boolean {
+  if (["GET", "HEAD"].includes(method) && [
+    "pool", "pool/timings", "pool/timings/show", "pool/show",
+    "ages-host/restart-iis", "iis/restart"
+  ].includes(route)) return true;
+  if (method !== "POST") return false;
+  return ["pool/timings/clear", "pool/warmup", "ages-host/restart-iis", "iis/restart"].includes(route) ||
+    /^pool\/(?:backends\/[^/]+\/drain-recycle|slots\/[^/]+\/recycle)$/.test(route);
 }
 
 function isStateChangingGet(path: string): boolean {
-  const normalized = path.toLowerCase();
+  const normalized = path.toLowerCase().replace(/\/$/, "");
   return ["/foreign/broker/iis/restart", "/foreign/broker/ages-host/restart-iis",
     "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
 }
@@ -147,7 +154,7 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
   });
 
   const gate = (req: Request, res: Response, next: NextFunction): void => {
-    const routeKind = brokerRouteKind(req.path);
+    const routeKind = brokerRouteKind(req.path, req.method);
     if (routeKind === "ages-proxy") {
       next();
       return;

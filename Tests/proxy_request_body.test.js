@@ -160,6 +160,24 @@ for (const prefix of ["/ages", "/foreign/broker/ages"]) {
   }
 }
 
+test("unregistered control-like paths reach the AGES catch-all", async t => {
+  const upstream = http.createServer((_req, res) => res.end("proxied"));
+  const upstreamUrl = await listen(upstream, t);
+  const proxyUrl = await listen(createProxy(upstreamUrl), t);
+  for (const target of [
+    { path: "/ages/health/status", method: "GET" },
+    { path: "/foreign/broker/heartbeat/custom", method: "GET" },
+    { path: "/ages/pool/custom", method: "GET" },
+    { path: "/foreign/broker/iis/custom", method: "GET" },
+    { path: "/ages/health", method: "POST" },
+    { path: "/ages/pool/show", method: "POST" }
+  ]) {
+    const result = await request(`${proxyUrl}${target.path}`, target.method, {}, undefined);
+    assert.equal(result.status, 200, `${target.method} ${target.path}`);
+    assert.equal(result.body.toString(), "proxied");
+  }
+});
+
 test("proxy failure log excludes query values and upstream error messages", async t => {
   const warnings = [];
   const proxyUrl = await listen(createProxy("http://unused", {

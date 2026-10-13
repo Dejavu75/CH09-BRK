@@ -30,13 +30,17 @@ app.post("/foreign/broker/pool/timings/clear", (_req, res) => res.json({ status:
 app.all("/ages/autorizar", (_req, res) => res.json({ status: "proxied" }));
 for (const path of ["/ages/ages/autorizar", "/ages/~mini~/beat.ages",
   "/foreign/broker/autorizar", "/foreign/broker/ages/autorizar",
-  "/foreign/broker/~mini~/beat.ages", "/foreign/broker/other/module/action"]) {
+  "/foreign/broker/~mini~/beat.ages", "/foreign/broker/other/module/action",
+  "/ages/health/status", "/foreign/broker/heartbeat/custom",
+  "/ages/pool/custom", "/foreign/broker/iis/custom"]) {
   app.all(path, (_req, res) => res.json({ status: "proxied" }));
 }
 app.get("/foreign/broker/heartbeat/beat", (_req, res) => res.json({ status: "beat" }));
 app.get("/foreign/broker/health", (_req, res) => res.json({ status: "healthy" }));
 app.get("/ages/health", (_req, res) => res.json({ status: "healthy" }));
 app.get("/ages/heartbeat/beat", (_req, res) => res.json({ status: "beat" }));
+app.post("/ages/health", (_req, res) => res.json({ status: "proxied" }));
+app.post("/ages/pool/show", (_req, res) => res.json({ status: "proxied" }));
 app.get("/foreign/broker/iis/restart", (_req, res) => res.json({ status: "restarted" }));
 app.get("/ages/pool/show", (_req, res) => res.send("private alias"));
 app.get("/ages/iis/restart", (_req, res) => res.json({ status: "restarted" }));
@@ -62,24 +66,32 @@ async function request(path, init = {}) {
 
 test("classifies Broker controls, not AGES proxy paths, as machine routes", () => {
   for (const path of ["/foreign/broker/heartbeat/beat", "/foreign/broker/health", "/ages/health",
-    "/ages/heartbeat/beat", "/FOREIGN/BROKER/HEARTBEAT/BEAT", "/AGES/HEALTH"]) {
+    "/ages/heartbeat/beat", "/FOREIGN/BROKER/HEARTBEAT/BEAT", "/AGES/HEALTH",
+    "/foreign/broker/health/", "/ages/heartbeat/"]) {
     assert.equal(isMachineRoute(path), true, path);
   }
   for (const path of ["/foreign/broker/pool/show", "/foreign/broker/pool/timings/clear",
     "/foreign/broker/iis/restart", "/foreign/broker/ages-host/restart-iis", "/foreign/broker", "/",
     "/ages/pool/show", "/ages/iis/restart", "/ages/", "/ages/autorizar",
-    "/foreign/broker/ages/autorizar", "/foreign/broker/ologin.autorizar.ages", "/AGES/autorizar"]) {
+    "/foreign/broker/ages/autorizar", "/foreign/broker/ologin.autorizar.ages", "/AGES/autorizar",
+    "/ages/health/status", "/foreign/broker/heartbeat/custom", "/ages/pool/custom",
+    "/foreign/broker/iis/custom"]) {
     assert.equal(isMachineRoute(path), false, path);
   }
+  assert.equal(isMachineRoute("/ages/health", "POST"), false);
 });
 
 test("passes AGES proxy routes on both mounts without Broker credentials", async () => {
   for (const path of ["/ages/autorizar", "/ages/ages/autorizar", "/ages/~mini~/beat.ages",
     "/foreign/broker/autorizar", "/foreign/broker/ages/autorizar",
-    "/foreign/broker/~mini~/beat.ages", "/foreign/broker/other/module/action"]) {
+    "/foreign/broker/~mini~/beat.ages", "/foreign/broker/other/module/action",
+    "/ages/health/status", "/foreign/broker/heartbeat/custom",
+    "/ages/pool/custom", "/foreign/broker/iis/custom"]) {
     assert.equal((await request(path)).status, 200, path);
     assert.equal((await request(path, { method: "POST", headers: { [SERVICE_KEY_HEADER]: "wrong" } })).status, 200, path);
   }
+  assert.equal((await request("/ages/health", { method: "POST" })).status, 200);
+  assert.equal((await request("/ages/pool/show", { method: "POST" })).status, 200);
 });
 
 test("denies Broker machine controls without separate credential and denies session as substitute", async () => {
@@ -87,6 +99,10 @@ test("denies Broker machine controls without separate credential and denies sess
   assert.equal((await request("/foreign/broker/health")).status, 401);
   assert.equal((await request("/ages/health")).status, 401);
   assert.equal((await request("/ages/heartbeat/beat")).status, 401);
+  assert.equal((await request("/ages/health/")).status, 401);
+  assert.equal((await request("/ages/heartbeat/beat/")).status, 401);
+  assert.equal((await request("/ages/pool/show/")).status, 401);
+  assert.equal((await request("/ages/iis/restart/")).status, 401);
   for (const path of ["/foreign/broker/heartbeat/beat", "/foreign/broker/health",
     "/ages/health", "/ages/heartbeat/beat"]) {
     assert.equal((await request(path, { headers: { [SERVICE_KEY_HEADER]: serviceKey } })).status, 200, path);
@@ -182,6 +198,11 @@ test("login session protects pages and CSRF protects mutation and logout", async
     headers: { Cookie: cookie, Origin: origin, "X-CSRF-Token": session.csrfToken }
   })).status, 200);
   assert.equal((await request("/ages/iis/restart", { headers: { Cookie: cookie } })).status, 403);
+  assert.equal((await request("/ages/iis/restart/", { headers: { Cookie: cookie } })).status, 403);
+  assert.equal((await request("/ages/iis/restart/", { method: "HEAD", headers: { Cookie: cookie } })).status, 403);
+  assert.equal((await request("/ages/iis/restart/", {
+    headers: { Cookie: cookie, Origin: origin, "X-CSRF-Token": session.csrfToken }
+  })).status, 200);
   assert.equal((await request("/auth/logout", {
     method: "POST", headers: { Cookie: cookie, Origin: origin, "X-CSRF-Token": session.csrfToken }
   })).status, 200);
