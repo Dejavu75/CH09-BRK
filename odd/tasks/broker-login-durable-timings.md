@@ -99,7 +99,32 @@ requested that this arbitrary retention cap be removed.
   inter-MS token. CH09 currently validates neither inter-MS token and has no
   inter-MS verification secret in its deployment templates; its new service
   gate expects a different header. Verify the AGES authorization boundary and
-  obtain authority for any MS07 change before implementation.
+  coordinate the separately authorized MS07 change before implementation.
+- [ ] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
+  token only on the Broker heartbeat beat route when its HMAC signature,
+  expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
+  scope are valid. Keep AGES proxy routes on their existing fail-closed
+  machine gate; never treat their forwarded AGES credential as inbound Broker
+  authority. Do not embed a shared signing secret in the image or silently
+  accept unsigned beats. Route: delegated direct. Trigger: auth gate,
+  verifier, tests, and documentation span multiple non-trivial files;
+  preparation was delegated. TDD: unset, ordinary focused tests plus
+  `npm test` and `npm run tsc`. RDD: clone-local disabled/unmanaged.
+  Checks: positive token from current signer, wrong audience/scope/issuer,
+  expiry, tampering, missing secret and unsigned beat; no token or secret in
+  logs/timings; Docker build and diff check. This is a safe interoperability
+  slice, not proof of zero-preparation deployment: the existing Broker image
+  lacks a verified shared secret source and T10 remains open. Local commit
+  `05eb9c0f352436edad53b78088107427735f8697` on
+  `feat/broker-login-durable-timings-11-interms` (122 authored changed lines,
+  unpushed) implements the scoped GET exception. TypeScript, focused route
+  tests 6/6, diff check, and secret scan passed. Full suite is 96/97 in the
+  Windows CRLF checkout due the previously identified unrelated IIS LF
+  assertion. Docker build could not run because Docker Desktop did not start;
+  keep this check pending before closing T11. Independent read-only challenge
+  found no route escalation or logging bypass. Shared HMAC possession does not
+  prove unique MS07 identity: any holder could mint an MS07-looking token.
+  Actual MS07 `MSCODE=MS07` and shared-secret availability are unverified.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -199,8 +224,8 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 2,152 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
-  T8 101, T9 101; generated `build` excluded). The published chain has draft tracker PR #8
+  count: 2,274 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101, T9 101, T11 122; generated `build` excluded). The published chain has draft tracker PR #8
   (`feat/broker-login-durable-timings`) against `main` and eight cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
@@ -221,7 +246,8 @@ requested that this arbitrary retention cap be removed.
   pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
   read-only review found that expired login attempts and session rows had no
   scheduled cleanup; T8 corrected this in bounded sweeps. T9 is committed
-  locally but not published; T10 remains open for image-only initialization.
+  locally but not published; T11 is committed locally with Docker build pending;
+  T10 remains open for image-only initialization.
   Next: resolve the machine-client authentication contract and external
   origin before claiming automatic deployment; keep the tracker unmerged until
   release readiness is proven. Pushing to `main` publishes Docker Hub
