@@ -2,8 +2,8 @@
 
 ## Objective and problem
 
-Give CH09-BRK a BackGES-style interactive login, initialize it from the same
-application user file used by BackGES, protect Broker endpoints, and preserve
+Give CH09-BRK a BackGES-style interactive login with exactly two Broker-owned
+general accounts created by the image, protect Broker endpoints, and preserve
 timing records across process restarts and container recreation. The original
 Broker timing ring discarded records after 500 entries; the user has now
 requested that this arbitrary retention cap be removed.
@@ -16,21 +16,33 @@ requested that this arbitrary retention cap be removed.
   `main`, installation, deployment, or merge is authorized.
 - Interactive routes require a browser session. Automated AGES and heartbeat
   consumers use a separate service credential. ACME HTTP-01 remains public.
-- Use the BackGES htpasswd-format user source at installation through a
-  configured read-only mount; never copy credential contents into Git.
+- T1-T8 used the BackGES htpasswd-format source. The user has superseded that
+  source requirement: BackGES remains unchanged, and the Broker image must
+  provide exactly two general accounts without a preinstalled user file.
+  Store only password hashes in source/image; never plaintext credentials.
 - Persist records on guest-local storage, not a container layer or the
   physical Hyper-V host. Never put plaintext secrets in ordinary logs.
 - Preserve existing AGES proxy semantics except for the authentication gate.
+- The user confirmed that the image itself must initialize the Broker on an
+  existing `ges01` without preparatory edits to its Compose or runtime env.
+  BackGES remains unchanged. Do not weaken machine-route authentication or
+  claim this is complete merely because the credential file is removed.
 - Existing untracked `.atl/` and `.codegraph/` are outside this feature.
 
 ## Acceptance criteria
 
-- Valid BackGES-file users can log in to Broker; invalid users cannot.
+- The two specified Broker general accounts can log in without a host
+  htpasswd file; other users cannot. No plaintext password is committed or
+  emitted by tests, build logs, runtime logs, or documentation.
 - Session cookie, origin/CSRF checks, rate limiting, logout, expiry, and
   server-side session validation follow the BackGES security model.
 - Broker pages and admin endpoints require a human session; machine routes
   require an explicit service credential; unauthenticated calls fail closed.
 - ACME challenge remains accessible without authentication.
+- An unchanged existing `ges01` Compose/runtime can start the new image and
+  serve the two general accounts, authenticated machine requests, and durable
+  timing/session state. Verify this at the actual runtime boundary before
+  claiming zero-preparation deployment.
 - Timing records survive a process restart and container recreation using a
   configured persistent mount. No fixed record-count retention discards old
   records; durable clear remains available. Reads use bounded pages rather
@@ -41,6 +53,45 @@ requested that this arbitrary retention cap be removed.
   values. This intentionally changes the current raw timing view.
 
 ## Tasks
+
+- [x] **T9 — Bootstrap Broker-owned general accounts.** Replace the required
+  BackGES credential-file source with exactly two built-in password hashes,
+  remove the htpasswd host-mount prerequisite from deployment templates, and
+  cover valid/invalid login and first-start behavior. BackGES is unchanged.
+  Route: delegated direct. Trigger: auth implementation, deployment templates,
+  tests, and documentation span multiple non-trivial files; writing preparation
+  is delegated. Checks: focused auth/route tests, `npm run tsc`, `npm test`,
+  local Docker build, Compose validation, secret scan, and diff check. No
+  production deployment or merge is authorized. Existing origin, machine-key,
+  and durable-state release gates remain explicit rather than silently waived.
+  Commit `209d0e4fe66fbbbd81723eaf9f27cfd06fb881ee` on local branch
+  `feat/broker-login-durable-timings-09-default-users` (101 authored changed
+  lines; not pushed). TypeScript, focused
+  auth/routes 13/13, Docker build, three Compose validations, ephemeral
+  positive logins for both requested credentials, secret scan, and diff check
+  passed. Full suite is 94/95 in the default Windows CRLF checkout because
+  of the pre-existing IIS literal-LF assertion; it passed 95/95 with temporary
+  LF normalization, then the script was restored. Independent read-only
+  review found that unchanged ges01 Compose/runtime still requires public
+  origin, service key, and persistent state path; image-only zero-preparation
+  deployment is therefore not met. Positive credential matching is not in CI
+  because plaintext secrets must not be committed. T10 tracks the remaining
+  image-only startup requirement; no runtime acceptance or publication
+  claimed. Review: disabled/unmanaged.
+- [ ] **T10 — Complete image-only first-start bootstrap.** Reuse only proven
+  existing guest-local persistent storage, derive or validate the HTTPS
+  browser origin without accepting untrusted host/proxy data, and preserve a
+  working authenticated contract for existing machine consumers without
+  manually preparing each `ges01`. Route: delegated direct. Trigger:
+  cross-cutting startup, security gate, deployment, and tests across multiple
+  non-trivial files. Current blocker: an image-generated service key cannot be
+  known to MS/AGES clients, and the public HTTPS origin may include an
+  external port/proxy not derivable from the certificate domain alone.
+  Checks: unchanged-Compose start, two human logins, machine 401 without
+  authority and successful authorized calls, TLS/proxy/origin matrix,
+  guest-local storage and restart/recreation durability, full tests and
+  Docker build. Do not implement a weaker gate or publish before the machine
+  credential contract is resolved.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -140,8 +191,8 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 2,051 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
-  T8 101; generated `build` excluded). The published chain has draft tracker PR #8
+  count: 2,152 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101, T9 101; generated `build` excluded). The published chain has draft tracker PR #8
   (`feat/broker-login-durable-timings`) against `main` and eight cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
@@ -161,8 +212,10 @@ requested that this arbitrary retention cap be removed.
   critical `proxy-addr` advisory, now patched. The feature-branch-chain is
   pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
   read-only review found that expired login attempts and session rows had no
-  scheduled cleanup; T8 corrected this in bounded sweeps. Next: obtain
-  external release-readiness evidence, and keep the tracker unmerged until
+  scheduled cleanup; T8 corrected this in bounded sweeps. T9 is committed
+  locally but not published; T10 remains open for image-only initialization.
+  Next: resolve the machine-client authentication contract and external
+  origin before claiming automatic deployment; keep the tracker unmerged until
   release readiness is proven. Pushing to `main` publishes Docker Hub
   `:latest`, which may be
   activated by Watchtower; live consumer HTTPS/service-key compatibility and
