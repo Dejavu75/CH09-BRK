@@ -100,7 +100,7 @@ requested that this arbitrary retention cap be removed.
   inter-MS verification secret in its deployment templates; its new service
   gate expects a different header. Verify the AGES authorization boundary and
   coordinate the separately authorized MS07 change before implementation.
-- [ ] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
+- [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
   scope are valid. Keep AGES proxy routes on their existing fail-closed
@@ -120,8 +120,9 @@ requested that this arbitrary retention cap be removed.
   unpushed) implements the scoped GET exception. TypeScript, focused route
   tests 6/6, diff check, and secret scan passed. Full suite is 96/97 in the
   Windows CRLF checkout due the previously identified unrelated IIS LF
-  assertion. Docker build could not run because Docker Desktop did not start;
-  keep this check pending before closing T11. Independent read-only challenge
+  assertion. Local Docker build with `--pull=false` passed on retry and
+  produced `ch09-brk:t11-local`; no container was deployed. Independent
+  read-only challenge
   found no route escalation or logging bypass. Shared HMAC possession does not
   prove unique MS07 identity: any holder could mint an MS07-looking token.
   Actual MS07 `MSCODE=MS07` and shared-secret availability are unverified.
@@ -246,7 +247,7 @@ requested that this arbitrary retention cap be removed.
   pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
   read-only review found that expired login attempts and session rows had no
   scheduled cleanup; T8 corrected this in bounded sweeps. T9 is committed
-  locally but not published; T11 is committed locally with Docker build pending;
+  locally but not published; T11 is locally checked and unpushed;
   T10 remains open for image-only initialization.
   Next: resolve the machine-client authentication contract and external
   origin before claiming automatic deployment; keep the tracker unmerged until
