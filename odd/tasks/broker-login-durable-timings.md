@@ -15,8 +15,10 @@ requested that this arbitrary retention cap be removed.
   in `Dejavu75/CH09-BRK` using the saved GitHub session. No direct push to
   `main`, installation, deployment, or merge is authorized.
 - Interactive routes require a browser session. The user clarified that the
-  machine surface is MS07 Broker beats (intended inter-MS authentication) and
-  AGES proxy endpoints; all manually viewed routes use human login. ACME
+  Broker-owned machine surface is the MS07 beat; true AGES passthrough is
+  outside Broker authentication because AGES owns its API key and login.
+  Broker-owned control aliases under `/ages` remain protected. All manually
+  viewed routes use human login. ACME
   HTTP-01 remains public. Do not assume the current MS07 beat already sends
   a key: local source shows it currently sends empty headers.
 - T1-T8 used the BackGES htpasswd-format source. The user has superseded that
@@ -39,8 +41,10 @@ requested that this arbitrary retention cap be removed.
   emitted by tests, build logs, runtime logs, or documentation.
 - Session cookie, origin/CSRF checks, rate limiting, logout, expiry, and
   server-side session validation follow the BackGES security model.
-- Broker pages and admin endpoints require a human session; machine routes
-  require an explicit service credential; unauthenticated calls fail closed.
+- Broker pages and admin endpoints require a human session; Broker-owned
+  machine routes require an explicit service credential and fail closed.
+  True AGES passthrough is not gated by Broker login/key, remains HTTPS-only,
+  and delegates API authorization to AGES.
 - ACME challenge remains accessible without authentication.
 - An unchanged existing `ges01` Compose/runtime can start the new image and
   serve the two general accounts, authenticated machine requests, and durable
@@ -87,35 +91,27 @@ requested that this arbitrary retention cap be removed.
   working authenticated contract for existing machine consumers without
   manually preparing each `ges01`. Route: delegated direct. Trigger:
   cross-cutting startup, security gate, deployment, and tests across multiple
-  non-trivial files. Current blocker: an image-generated service key cannot be
-  known to MS/AGES clients, and the public HTTPS origin may include an
-  external port/proxy not derivable from the certificate domain alone.
-  Checks: unchanged-Compose start, two human logins, machine 401 without
+  non-trivial files. Current blockers: the image still requires a machine
+  secret not proven available to MS07, and local origin/state fallbacks need
+  validation against the actual guest's proxy, certificate and log mount.
+  Checks: unchanged-Compose start, two human logins, Broker-owned machine 401 without
   authority and successful authorized calls, TLS/proxy/origin matrix,
   guest-local storage and restart/recreation durability, full tests and
   Docker build. Do not implement a weaker gate or publish before the machine
-  credential contract is resolved. Local contract mapping: MS07 currently
-  calls the Broker heartbeat with no headers, while its AGES beat has an
-  inter-MS token. CH09 currently validates neither inter-MS token and has no
-  inter-MS verification secret in its deployment templates; its new service
-  gate expects a different header. Verify the AGES authorization boundary and
-  coordinate the separately authorized MS07 change before implementation.
-  Read-only AGES mapping found no existing credential that unchanged clients
-  and the Broker image can safely share as inbound Broker authority;
-  `AGES_API_KEY` is outbound, and merely forwarding `X-AGES-API-Key` is not
-  a Broker authorization gate. An explicit machine-client/deployment contract
-  is still required before this acceptance criterion can close. Local client
+  credential contract is resolved. T11 implements a scoped Broker-beat
+  verifier, but deployed MS07 identity, secret availability, and endpoint
+  origin remain unverified. Local client
   mapping found that CA04-GCO and CA05-GCC can use MS01-provided AGES URLs
   and send AGES user tokens or AGES API keys, but no Broker service key;
   whether their deployed URLs actually traverse CH09 is unverified. The
-  current Broker gate would reject those clients if they do. Confirm the
-  intended client route before changing other products or weakening the gate.
+  current Broker gate would reject those clients if they do. The user has now
+  clarified that AGES passthrough does not need a Broker key; T14 changes
+  only that boundary. Live client routing remains unverified.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
-  scope are valid. Keep AGES proxy routes on their existing fail-closed
-  machine gate; never treat their forwarded AGES credential as inbound Broker
-  authority. Do not embed a shared signing secret in the image or silently
+  scope are valid. Do not treat AGES credentials as Broker-beat authority.
+  Do not embed a shared signing secret in the image or silently
   accept unsigned beats. Route: delegated direct. Trigger: auth gate,
   verifier, tests, and documentation span multiple non-trivial files;
   preparation was delegated. TDD: unset, ordinary focused tests plus
@@ -136,6 +132,9 @@ requested that this arbitrary retention cap be removed.
   found no route escalation or logging bypass. Shared HMAC possession does not
   prove unique MS07 identity: any holder could mint an MS07-looking token.
   Actual MS07 `MSCODE=MS07` and shared-secret availability are unverified.
+  The requirement to keep the AGES proxy on a Broker key gate was superseded
+  by the user's later scope clarification; T14 changes it without weakening
+  Broker-owned control endpoints.
 - [x] **T12 — Bootstrap durable state on an existing guest mount.** When
   explicit database paths are absent, initialize private session and timing
   databases beneath the already-mounted `/etc/nages2/logdir` path. Reject an
@@ -192,6 +191,21 @@ requested that this arbitrary retention cap be removed.
   If TLS terminates only at a proxy with no readable local certificate and
   no explicit origin, human routes fail closed with 403. Actual proxy Host,
   TLS forwarding, browser form, and certificate renewal remain T10 gates.
+- [ ] **T14 — Exempt only AGES passthrough from Broker authentication.**
+  True AGES proxy routes under both `/ages` and `/foreign/broker` must pass
+  through without a Broker session or service key while retaining global
+  HTTPS enforcement and forwarding AGES credentials. Explicit Broker-owned
+  controls (`/pool`, `/iis`, `/ages-host`, `/health`, `/heartbeat`, including
+  their aliases under `/ages`) keep their existing human or machine gates.
+  Preserve the exact MS07 signed-beat exception. Route: delegated direct.
+  Trigger: route classification, HTTP tests, and docs are multiple non-trivial
+  files; exploration was delegated. TDD: unset; runner `npm test` and
+  `npm run tsc`. RDD: clone-local disabled/unmanaged. Checks: both proxy
+  mounts and catch-all routes without Broker credentials, AGES header/token
+  forwarding, protected controls with/without authority, HTTPS enforcement,
+  beat exception, full tests, Docker build, diff and secret scans. Do not
+  claim AGES always demands a key: its own login endpoint may accept requests
+  before issuing a token; AGES remains responsible for downstream auth.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
