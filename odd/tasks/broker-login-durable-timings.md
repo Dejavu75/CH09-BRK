@@ -107,14 +107,20 @@ requested that this arbitrary retention cap be removed.
   whether their deployed URLs actually traverse CH09 is unverified. The
   former Broker gate would reject those clients if they did. The user has now
   clarified that AGES passthrough does not need a Broker key; T14 changes
-  only that boundary. Live client routing remains unverified. Local commits:
-  CH09 `3c32257` on `feat/broker-login-durable-timings-15-root-state` and MS07
-  `8404963` on `codex/ms07-broker-introspection`; neither is pushed or
-  deployed. Focused CH09 13/13 and MS07 6/6 tests plus both TypeScript checks
-  passed. Independent verifier found no candidate-caused security blocker but
-  classified T10 as partial: full CH09 suite is blocked by denied PEM fixtures,
-  and real HTTPS, Linux ownership, Compose first start, and recreation remain
-  unverified. Review: disabled/unmanaged.
+  only that boundary. Live client routing remains unverified. CH09 commit
+  `3c32257` remains local and undeployed. MS07 identity fix `4dc088e` is the
+  clean local tip of `codex/ms07-broker-introspection`; its image was published
+  as `dhzacur/se_ms07_doc:broker-introspection-4dc088e` with registry digest
+  `sha256:678c9495b5f9d90d7432bb771b6073ad1371acbbdf917f046079e46b259e467f`.
+  An MS07-only deployment did not pass its runtime gate, so the automatic
+  rollback restored `dhzacur/se_ms07_doc:broker-auth-c9525f1`, image ID
+  `sha256:37d87a3330bcf3c3e0cc5a33a5e1b69ea87bf61dcb46833993132c375dadfd02`,
+  and the original Compose SHA-256
+  `541a6f4afeb20451abc409b7173a24c0e3ba8ba8d7ff020e466fc4412aefff09`.
+  Independent verification confirmed the restored container is running with
+  restart count zero and the rolled-back public validation route returns 404.
+  The exact failed runtime gate remains unverified, so T10 stays partial.
+  Review: disabled/unmanaged.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
@@ -402,3 +408,13 @@ requested that this arbitrary retention cap be removed.
   policy and its tests. The primary checkout cannot switch branches because
   its restricted sandbox denies stat of two changed certificate fixtures;
   this tracker update used an isolated sparse documentation worktree.
+- 2026-10-13 MS07 runtime attempt: source archive for clean commit `4dc088e`
+  matched SHA-256 before and after transfer to NAGES. Image
+  `dhzacur/se_ms07_doc:broker-introspection-4dc088e` was built and published at
+  registry digest
+  `sha256:678c9495b5f9d90d7432bb771b6073ad1371acbbdf917f046079e46b259e467f`.
+  The service-scoped MS07 deployment failed before a successful HTTPS token
+  proof and automatically restored the prior image and exact Compose bytes.
+  Independent read-only checks confirmed the rollback image, image ID,
+  Compose SHA-256, running state, restart count zero, and public endpoint 404.
+  The precise failed gate was not captured; no CH09 deployment is claimed.
