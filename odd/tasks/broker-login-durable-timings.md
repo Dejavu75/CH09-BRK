@@ -112,15 +112,18 @@ requested that this arbitrary retention cap be removed.
   clean local tip of `codex/ms07-broker-introspection`; its image was published
   as `dhzacur/se_ms07_doc:broker-introspection-4dc088e` with registry digest
   `sha256:678c9495b5f9d90d7432bb771b6073ad1371acbbdf917f046079e46b259e467f`.
-  An MS07-only deployment did not pass its runtime gate, so the automatic
-  rollback restored `dhzacur/se_ms07_doc:broker-auth-c9525f1`, image ID
-  `sha256:37d87a3330bcf3c3e0cc5a33a5e1b69ea87bf61dcb46833993132c375dadfd02`,
-  and the original Compose SHA-256
-  `541a6f4afeb20451abc409b7173a24c0e3ba8ba8d7ff020e466fc4412aefff09`.
-  Independent verification confirmed the restored container is running with
-  restart count zero and the rolled-back public validation route returns 404.
-  The exact failed runtime gate remains unverified, so T10 stays partial.
-  Review: disabled/unmanaged.
+  The first MS07-only deployment did not pass its runtime gate and restored
+  the prior image and exact Compose bytes. A second instrumented attempt
+  during scheduled downtime successfully deployed the corrected image.
+  Independent verification confirmed the container is running with restart
+  count zero, the effective Compose service references the new tag, an
+  unauthenticated public validation POST returns 401 `{"valid":false}`, and a
+  short-lived token generated inside MS07 returns 200 `{"valid":true}`. The
+  deployed Compose SHA-256 is
+  `d2656349301784b73d7af5bf749c08e2c9a6232105ade1e6e485e693a7e3ac6e`.
+  The earlier failed gate remains unverified; an endpoint-readiness race is
+  only an inference. CH09 remains undeployed, so T10 stays partial. Review:
+  disabled/unmanaged.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
@@ -418,3 +421,14 @@ requested that this arbitrary retention cap be removed.
   Independent read-only checks confirmed the rollback image, image ID,
   Compose SHA-256, running state, restart count zero, and public endpoint 404.
   The precise failed gate was not captured; no CH09 deployment is claimed.
+- 2026-10-13 MS07 instrumented retry: during scheduled downtime the user
+  explicitly disabled automatic rollback so a failure could remain available
+  for diagnosis. The service-scoped retry instead passed every named gate:
+  expected image and revision, running container with restart count zero,
+  public POST 401 `{"valid":false}` without a token, and public POST 200
+  `{"valid":true}` with a short-lived token generated inside MS07. Independent
+  read-only verification repeated those results and confirmed effective
+  Compose SHA-256
+  `d2656349301784b73d7af5bf749c08e2c9a6232105ade1e6e485e693a7e3ac6e`.
+  The first attempt's failure cause remains unknown; readiness timing is an
+  inference only. CH09 was not deployed and T10 remains open.
