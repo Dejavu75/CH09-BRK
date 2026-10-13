@@ -14,8 +14,11 @@ requested that this arbitrary retention cap be removed.
   authorized reviews and necessary fixes before publishing PRs toward `main`
   in `Dejavu75/CH09-BRK` using the saved GitHub session. No direct push to
   `main`, installation, deployment, or merge is authorized.
-- Interactive routes require a browser session. Automated AGES and heartbeat
-  consumers use a separate service credential. ACME HTTP-01 remains public.
+- Interactive routes require a browser session. The user clarified that the
+  machine surface is MS07 Broker beats (intended inter-MS authentication) and
+  AGES proxy endpoints; all manually viewed routes use human login. ACME
+  HTTP-01 remains public. Do not assume the current MS07 beat already sends
+  a key: local source shows it currently sends empty headers.
 - T1-T8 used the BackGES htpasswd-format source. The user has superseded that
   source requirement: BackGES remains unchanged, and the Broker image must
   provide exactly two general accounts without a preinstalled user file.
@@ -91,7 +94,12 @@ requested that this arbitrary retention cap be removed.
   authority and successful authorized calls, TLS/proxy/origin matrix,
   guest-local storage and restart/recreation durability, full tests and
   Docker build. Do not implement a weaker gate or publish before the machine
-  credential contract is resolved.
+  credential contract is resolved. Local contract mapping: MS07 currently
+  calls the Broker heartbeat with no headers, while its AGES beat has an
+  inter-MS token. CH09 currently validates neither inter-MS token and has no
+  inter-MS verification secret in its deployment templates; its new service
+  gate expects a different header. Verify the AGES authorization boundary and
+  obtain authority for any MS07 change before implementation.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
