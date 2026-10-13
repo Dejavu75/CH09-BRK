@@ -135,7 +135,7 @@ requested that this arbitrary retention cap be removed.
   The requirement to keep the AGES proxy on a Broker key gate was superseded
   by the user's later scope clarification; T14 changes it without weakening
   Broker-owned control endpoints.
-- [x] **T12 — Bootstrap durable state on an existing guest mount.** When
+- [ ] **T12 — Bootstrap durable state on an existing guest mount.** When
   explicit database paths are absent, initialize private session and timing
   databases beneath the already-mounted `/etc/nages2/logdir` path. Reject an
   absent, symlinked, read-only, or non-local mount instead of writing to the
@@ -165,6 +165,13 @@ requested that this arbitrary retention cap be removed.
   unrelated pre-existing IIS CRLF failure, one root-only ownership test
   skipped on Windows and covered by the Docker check. Runtime backing,
   rotation, backup, and unchanged ges01 recreation remain T10 gates.
+  Reopened on 2026-10-13: Lecar's verified guest-local log mount is owned by
+  uid 1000 while the container runs as root, so the current owner-equality
+  guard rejects the unchanged installation. The user accepted adapting the
+  image to trust the existing mount owner without changing ges01. Keep the
+  exact local writable mount, no group/world write, private root-owned child,
+  and foreign-owned child rejection; cover the accepted owner mismatch and
+  the previously rejected unsafe cases before closing this follow-up.
 - [x] **T13 — Resolve the human login origin from verified HTTPS requests.**
   Preserve the explicit `BROKER_PUBLIC_ORIGIN` policy when configured. When
   absent, use the exact request Host authority (including external port)
@@ -355,3 +362,10 @@ requested that this arbitrary retention cap be removed.
   Activation still requires verifying the actual BackGES htpasswd host path,
   guest-local storage, machine clients, TLS proxy settings, and existing
   Watchtower topology. No deployment or remote runtime acceptance claimed.
+
+## Log
+
+- 2026-10-13 user clarification: "Aceptado" after the proposal to adapt the
+  image for Lecar's uid-1000-owned guest-local log volume without changing
+  ges01. The root container may trust the volume owner, but the owner can
+  replace entries in that parent directory; this is an explicit trust boundary.
