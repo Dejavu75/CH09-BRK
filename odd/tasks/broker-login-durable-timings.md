@@ -104,7 +104,7 @@ requested that this arbitrary retention cap be removed.
   mapping found that CA04-GCO and CA05-GCC can use MS01-provided AGES URLs
   and send AGES user tokens or AGES API keys, but no Broker service key;
   whether their deployed URLs actually traverse CH09 is unverified. The
-  current Broker gate would reject those clients if they do. The user has now
+  former Broker gate would reject those clients if they did. The user has now
   clarified that AGES passthrough does not need a Broker key; T14 changes
   only that boundary. Live client routing remains unverified.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
@@ -191,7 +191,7 @@ requested that this arbitrary retention cap be removed.
   If TLS terminates only at a proxy with no readable local certificate and
   no explicit origin, human routes fail closed with 403. Actual proxy Host,
   TLS forwarding, browser form, and certificate renewal remain T10 gates.
-- [ ] **T14 — Exempt only AGES passthrough from Broker authentication.**
+- [x] **T14 — Exempt only AGES passthrough from Broker authentication.**
   True AGES proxy routes under both `/ages` and `/foreign/broker` must pass
   through without a Broker session or service key while retaining global
   HTTPS enforcement and forwarding AGES credentials. Explicit Broker-owned
@@ -206,6 +206,19 @@ requested that this arbitrary retention cap be removed.
   beat exception, full tests, Docker build, diff and secret scans. Do not
   claim AGES always demands a key: its own login endpoint may accept requests
   before issuing a token; AGES remains responsible for downstream auth.
+  Local commits `f087bcb001e0e596f4e1be7a2d88fc7a0c32c602` and
+  `2018a722c707c5542e75ff1b766da388593b62d7` on
+  `feat/broker-login-durable-timings-14-ages-proxy` (201 authored changed
+  lines, generated build excluded; unpushed) implement and correct the route
+  boundary. Independent read-only review found that prefix-based control
+  classification also blocked AGES catch-all paths such as `health/status`;
+  the follow-up matches the registered routes and methods, including optional
+  trailing slash, while preserving the signed MS07 exception and CSRF on
+  state-changing IIS GET. Focused 26/26, TypeScript, Docker build, and diff
+  check passed. Full Windows suite: 105 pass, one pre-existing unrelated IIS
+  CRLF assertion failure, one Windows ownership test skipped. No remote
+  runtime, upstream AGES authorization, or deployment claimed. Review:
+  disabled/unmanaged.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -305,8 +318,8 @@ requested that this arbitrary retention cap be removed.
   and corrections. Issue #6 covers login/authentication and issue #7 covers
   durable redacted timings. Both were created from the repository issue form,
   remain open, and have confirmed `status:approved` labels. Running authored committed
-  count: 2,690 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
-  T8 101, T9 101, T11 122, T12 184, T13 232; generated `build` and certificate fixtures excluded). The published chain has draft tracker PR #8
+  count: 2,891 (T1 398, T2 375, T3 317, T4 280, T5 309, T6 217, T7 54,
+  T8 101, T9 101, T11 122, T12 184, T13 232, T14 201; generated `build` and certificate fixtures excluded). The published chain has draft tracker PR #8
   (`feat/broker-login-durable-timings`) against `main` and eight cumulative
   child branches, each with one focused work-unit commit. The tracker contains
   this ODD document; child diffs exclude its repeated progress edits. Slices:
@@ -327,7 +340,7 @@ requested that this arbitrary retention cap be removed.
   pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
   read-only review found that expired login attempts and session rows had no
   scheduled cleanup; T8 corrected this in bounded sweeps. T9 is committed
-  locally but not published; T11-T13 are locally checked and unpushed;
+  locally but not published; T11-T14 are locally checked and unpushed;
   T10 remains open for image-only initialization.
   Next: resolve the machine-client authentication contract and external
   origin before claiming automatic deployment; keep the tracker unmerged until
