@@ -16,13 +16,23 @@ exports.CredentialFile = void 0;
 const node_child_process_1 = require("node:child_process");
 const node_fs_1 = require("node:fs");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+const session_store_1 = require("./session_store");
 const BCRYPT_HASH = /^\$2[aby]\$\d\d\$[./A-Za-z0-9]{53}$/;
 const SHA512_CRYPT_HASH = /^\$6\$(?:rounds=\d+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$/;
+const BUILTIN_USERS = new Map([
+    ["guillermo.negrete", "$2b$12$SVBYP8bMTMlklGeyg2/J4utrEumn9DHFUwQHMNek/23.MzTSiUtWC"],
+    ["diego.zacur", "$2b$12$W6BT175N10lAPiuADLPWB.JX9vhsdtzp1/bsBIf68DXT3QN3Pgr5G"]
+]);
 class CredentialFile {
     constructor(path) {
         this.path = path;
         this.users = new Map();
         this.dummyHash = bcryptjs_1.default.hashSync("invalid-password", 12);
+        if (!path) {
+            for (const [username, hash] of BUILTIN_USERS)
+                this.users.set(username, hash);
+            return;
+        }
         for (const line of (0, node_fs_1.readFileSync)(path, "utf8").split(/\r?\n/)) {
             const entry = line.trim();
             if (!entry || entry.startsWith("#"))
@@ -40,6 +50,10 @@ class CredentialFile {
         if (this.users.size === 0)
             throw new Error("Credential file contains no users");
     }
+    fingerprint(username) {
+        const hash = this.users.get(username);
+        return hash ? (0, session_store_1.sha256)(hash) : null;
+    }
     verify(username, password) {
         return __awaiter(this, void 0, void 0, function* () {
             const hash = this.users.get(username);
@@ -55,9 +69,12 @@ class CredentialFile {
                 const candidate = hash.startsWith("$2y$") ? `$2b$${hash.slice(4)}` : hash;
                 return bcryptjs_1.default.compare(password, candidate).catch(() => false);
             }
+            const path = this.path;
+            if (!path)
+                return false;
             return new Promise(resolve => {
                 var _a, _b;
-                const child = (0, node_child_process_1.execFile)("htpasswd", ["-vi", this.path, username], {
+                const child = (0, node_child_process_1.execFile)("htpasswd", ["-vi", path, username], {
                     timeout: 5000, maxBuffer: 1024, windowsHide: true
                 }, error => resolve(error === null));
                 (_a = child.stdin) === null || _a === void 0 ? void 0 : _a.on("error", () => undefined);

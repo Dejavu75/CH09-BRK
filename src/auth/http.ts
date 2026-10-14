@@ -2,8 +2,18 @@ import { timingSafeEqual } from "node:crypto";
 import { NextFunction, Request, RequestHandler, Response, Router, json, urlencoded } from "express";
 
 import { BrokerAuthService } from "./auth_service";
+import { verifyMs07BeatBearer } from "./interms";
 
 export const SERVICE_KEY_HEADER = "x-broker-service-api-key";
+
+export const requireSecureTransport: RequestHandler = (req, res, next) => {
+  if (req.secure) {
+    next();
+    return;
+  }
+  // Do not redirect: a redirect could forward credentials or service keys.
+  res.status(403).set("Cache-Control", "no-store").json({ error: "HTTPS required" });
+};
 
 function safeNext(value: unknown): string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") &&
@@ -20,6 +30,11 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? undefined : value;
 }
 
+function requestHost(req: Request): string | undefined {
+  const hostHeaders = req.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === "host");
+  return hostHeaders.length === 1 ? firstHeader(req.headers.host) : undefined;
+}
+
 function sameKey(supplied: string | undefined, expected: string): boolean {
   if (!supplied) return false;
   const actual = Buffer.from(supplied, "utf8");
@@ -27,7 +42,9 @@ function sameKey(supplied: string | undefined, expected: string): boolean {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export function isMachineRoute(path: string): boolean {
+type BrokerRouteKind = "human" | "machine" | "ages-proxy";
+
+function brokerRouteKind(path: string, method: string): BrokerRouteKind {
   const normalized = path.toLowerCase();
   let route: string;
   if (normalized === "/ages" || normalized.startsWith("/ages/")) {
@@ -35,27 +52,39 @@ export function isMachineRoute(path: string): boolean {
   } else if (normalized === "/foreign/broker" || normalized.startsWith("/foreign/broker/")) {
     route = normalized.slice("/foreign/broker".length).replace(/^\//, "");
   } else {
-    return false;
+    return "human";
   }
-  if (!route) return false;
-  if (isHumanControlRoute(route)) return false;
-  if (route === "health" || route === "heartbeat" || route.startsWith("heartbeat/")) return true;
-  // The Broker router's final catch-all routes proxy arbitrary AGES functions.
-  return true;
+  // Express accepts one optional trailing slash on registered routes.
+  const exactRoute = route.endsWith("/") ? route.slice(0, -1) : route;
+  if (!route || isHumanControlRoute(exactRoute, method)) return "human";
+  if ((exactRoute === "health" && ["GET", "HEAD"].includes(method)) ||
+      exactRoute === "heartbeat" || exactRoute === "heartbeat/beat") return "machine";
+  // Everything else reaches the Broker router's AGES proxy handlers.
+  return "ages-proxy";
 }
 
-function isHumanControlRoute(route: string): boolean {
-  return route === "pool" || route.startsWith("pool/") || route === "ages-host" ||
-    route.startsWith("ages-host/") || route === "iis" || route.startsWith("iis/");
+export function isMachineRoute(path: string, method = "GET"): boolean {
+  return brokerRouteKind(path, method) === "machine";
+}
+
+function isHumanControlRoute(route: string, method: string): boolean {
+  if (["GET", "HEAD"].includes(method) && [
+    "pool", "pool/timings", "pool/timings/show", "pool/show",
+    "ages-host/restart-iis", "iis/restart"
+  ].includes(route)) return true;
+  if (method !== "POST") return false;
+  return ["pool/timings/clear", "pool/warmup", "ages-host/restart-iis", "iis/restart"].includes(route) ||
+    /^pool\/(?:backends\/[^/]+\/drain-recycle|slots\/[^/]+\/recycle)$/.test(route);
 }
 
 function isStateChangingGet(path: string): boolean {
-  const normalized = path.toLowerCase();
+  const normalized = path.toLowerCase().replace(/\/$/, "");
   return ["/foreign/broker/iis/restart", "/foreign/broker/ages-host/restart-iis",
     "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
 }
 
-export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
+export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, interMsSecret?: string,
+  centralVerifier?: (authorization: string | undefined) => Promise<boolean>): {
   routes: Router;
   gate: RequestHandler;
 } {
@@ -65,6 +94,10 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
 
   const routes = Router();
   routes.use(json({ limit: "8kb" }), urlencoded({ extended: false, limit: "8kb" }));
+  routes.use((req, res, next) => {
+    if (auth.expectedOrigin(requestHost(req), req.secure)) return next();
+    res.status(403).set("Cache-Control", "no-store").json({ error: "Forbidden" });
+  });
 
   routes.get("/login", (req, res) => {
     const next = safeNext(req.query.next);
@@ -80,9 +113,10 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
     const result = await auth.login({
       username: req.body?.username,
       password: req.body?.password,
-      // req.ip is derived from untrusted X-Forwarded-For while app.ts trusts every proxy.
-      clientKey: req.socket.remoteAddress || "unknown",
-      origin: req.get("origin")
+      clientKey: req.ip || req.socket.remoteAddress || "unknown",
+      origin: req.get("origin"),
+      host: requestHost(req),
+      secure: req.secure
     });
     res.set("Cache-Control", "no-store");
     if (result.retryAfterSeconds) res.set("Retry-After", String(result.retryAfterSeconds));
@@ -111,6 +145,8 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
     const result = auth.logout({
       cookieHeader: req.headers.cookie,
       origin: req.get("origin"),
+      host: requestHost(req),
+      secure: req.secure,
       csrfToken: firstHeader(req.headers["x-csrf-token"]) ?? req.body?.csrfToken
     });
     res.set("Cache-Control", "no-store");
@@ -119,12 +155,38 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
   });
 
   const gate = (req: Request, res: Response, next: NextFunction): void => {
-    if (isMachineRoute(req.path)) {
-      if (!sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey)) {
-        res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+    const routeKind = brokerRouteKind(req.path, req.method);
+    if (routeKind === "ages-proxy") {
+      next();
+      return;
+    }
+    if (routeKind === "machine") {
+      const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
+      if (sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey)) {
+        next();
         return;
       }
-      next();
+      const authorization = firstHeader(req.headers.authorization);
+      if (scopedBeat && req.method === "GET" && centralVerifier && authorization) {
+        void centralVerifier(authorization)
+          .then(authorized => {
+            if (authorized) next();
+            else res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+          })
+          .catch(() => res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" }));
+        return;
+      }
+      if (scopedBeat && req.method === "GET" &&
+          verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret)) {
+        next();
+        return;
+      }
+      res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+      return;
+    }
+    const expectedOrigin = auth.expectedOrigin(requestHost(req), req.secure);
+    if (!expectedOrigin) {
+      res.status(403).set("Cache-Control", "no-store").json({ error: "Forbidden" });
       return;
     }
     const result = auth.verify({
@@ -132,6 +194,8 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string): {
       // Legacy GET aliases restart IIS; they must not bypass origin/CSRF checks.
       method: ["GET", "HEAD"].includes(req.method) && isStateChangingGet(req.path) ? "POST" : req.method,
       origin: req.get("origin"),
+      host: requestHost(req),
+      secure: req.secure,
       csrfToken: firstHeader(req.headers["x-csrf-token"])
     });
     if (result.setCookie) res.set("Set-Cookie", result.setCookie);
