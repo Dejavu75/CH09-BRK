@@ -67,6 +67,7 @@ function createProxy(upstreamUrl, options = {}) {
     "./routes/rou_broker": router,
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
+    "./services/tls_reloader": { startTlsCertificateReload() { return () => {}; } },
     "./auth/auth_service": { BrokerAuthService: class { constructor() { authInitialized = true; } } },
     "./auth/central_beat": { verifyMs07BeatCentrally() {} },
     "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; },
@@ -76,7 +77,7 @@ function createProxy(upstreamUrl, options = {}) {
       return "synthetic-service-key-with-32-bytes";
     } },
     "./auth/trusted_proxy": { trustedProxyAddresses: () => false },
-    "./utils/logger": { log() {}, error() {}, isConfigEnabled: () => true },
+    "./utils/logger": { log() {}, warn() {}, error() {}, isConfigEnabled: () => true },
     http: { createServer(value) { app = value; return { listen() {} }; } }
   });
   return http.createServer(app);

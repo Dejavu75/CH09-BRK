@@ -92,9 +92,9 @@ requested that this arbitrary retention cap be removed.
   manually preparing each `ges01`. Route: direct inline after delegated
   read-only mapping; independent high-risk verification follows. The approved
   central validation contract removes the per-ges01 HMAC secret and the image
-  now persists a generated service key when no override exists. Actual NAGES
-  HTTPS reachability, MS07 rollout, unchanged-Compose startup, and local
-  origin/state fallbacks still need runtime validation against the guest.
+  now persists a generated service key when no override exists. MS07 HTTPS
+  reachability, unchanged-Compose startup, and local origin/state fallbacks
+  were validated against the Lecar guest.
   Checks: unchanged-Compose start, two human logins, Broker-owned machine 401 without
   authority and successful authorized calls, TLS/proxy/origin matrix,
   guest-local storage and restart/recreation durability, full tests and
@@ -108,7 +108,10 @@ requested that this arbitrary retention cap be removed.
   former Broker gate would reject those clients if they did. The user has now
   clarified that AGES passthrough does not need a Broker key; T14 changes
   only that boundary. Live client routing remains unverified. Corrected CH09
-  cumulative tip `47d5b17` is published in PR #23 and remains undeployed.
+  cumulative tip `47d5b17` was integrated through the feature chain into main
+  merge commit `ddda15e` and deployed automatically by the existing labeled
+  Watchtower as build `1.0.15`, image ID
+  `sha256:e62e12e74fe103a793fce777fcf56835e003858783242dc8e98c4def5c89e945`.
   MS07 identity fix `4dc088e` is the
   clean local tip of `codex/ms07-broker-introspection`; its image was published
   as `dhzacur/se_ms07_doc:broker-introspection-4dc088e` with registry digest
@@ -123,8 +126,24 @@ requested that this arbitrary retention cap be removed.
   deployed Compose SHA-256 is
   `d2656349301784b73d7af5bf749c08e2c9a6232105ade1e6e485e693a7e3ac6e`.
   The earlier failed gate remains unverified; an endpoint-readiness race is
-  only an inference. CH09 remains undeployed, so T10 stays partial. Review:
-  disabled/unmanaged.
+  only an inference. Independent CH09 runtime verification confirmed the
+  deployed revision, restart count zero, guest-local ext4 state with private
+  permissions, valid public TLS, 401 for missing/invalid beat tokens, and 200
+  for a valid token generated inside MS07. Both built-in human accounts then
+  completed login, authenticated session, protected pool read, and logout over
+  public HTTPS without exposing their credentials. The pool reported
+  `ready=10`, `warming=0`, `error=0`, split A=5 and B=5. One authorized
+  no-pull recreation of only `ch09-brk` preserved an authenticated session,
+  the service-key identity, session/timing database inodes, Compose bytes, and
+  Watchtower identity. The recreated container retained the expected image and
+  restart count zero. One slot initially failed warmup with HTTP 500, producing
+  a transient 9/0/1 pool; before any manual recycle the protected pool returned
+  to 10/0/0 and A=5/B=5. The five-minute ping recycle path is consistent with
+  that recovery, but causality was not independently proven. Independent
+  verification passed the current image, container state, Compose hash,
+  guest-local private state, and Watchtower state. T10 remains partial because
+  live routed CA04/CA05 traffic and certificate renewal were not exercised.
+  Review: disabled/unmanaged.
 - [x] **T11 — Verify scoped MS07 Broker beats.** Accept an inter-MS Bearer
   token only on the Broker heartbeat beat route when its HMAC signature,
   expiry, issuer, exact `broker` audience, MS07 identity, and `broker:beat`
@@ -153,7 +172,7 @@ requested that this arbitrary retention cap be removed.
   The requirement to keep the AGES proxy on a Broker key gate was superseded
   by the user's later scope clarification; T14 changes it without weakening
   Broker-owned control endpoints.
-- [ ] **T12 — Bootstrap durable state on an existing guest mount.** When
+- [x] **T12 — Bootstrap durable state on an existing guest mount.** When
   explicit database paths are absent, initialize private session and timing
   databases beneath the already-mounted `/etc/nages2/logdir` path. Reject an
   absent, symlinked, read-only, or non-local mount instead of writing to the
@@ -168,8 +187,8 @@ requested that this arbitrary retention cap be removed.
   durable clear with SQLite sidecars, explicit override compatibility,
   Docker image build, diff check. A short-syntax Compose bind can silently
   create an empty host directory; image checks cannot prove guest-local host
-  backing or prevent host log rotation from deleting state. T10 remains open
-  until actual guest storage and recreation behavior are verified. Review
+  backing or prevent host log rotation from deleting state. Actual guest
+  storage and recreation behavior were subsequently verified. Review
   found that chmod alone does not make a foreign-owned preexisting child
   private; reject it before accepting the fallback. Newer Compose templates
   still set both explicit DB paths and therefore never take this fallback.
@@ -181,8 +200,9 @@ requested that this arbitrary retention cap be removed.
   named volume (start) versus absent/tmpfs/foreign-owned mounts (reject)
   passed; diff and secret scans passed. Full Windows suite: 99 pass, one
   unrelated pre-existing IIS CRLF failure, one root-only ownership test
-  skipped on Windows and covered by the Docker check. Runtime backing,
-  rotation, backup, and unchanged ges01 recreation remain T10 gates.
+  skipped on Windows and covered by the Docker check. Runtime backing and
+  unchanged ges01 recreation were verified later; rotation and backup remain
+  operator responsibilities rather than image claims.
   Reopened on 2026-10-13: Lecar's verified guest-local log mount is owned by
   uid 1000 while the container runs as root, so the current owner-equality
   guard rejects the unchanged installation. The user accepted adapting the
@@ -200,8 +220,10 @@ requested that this arbitrary retention cap be removed.
   Docker and WSL are also denied locally. A later fresh verifier passed the
   Linux ownership/symlink/service-key checks 7/7, and the corrected cumulative
   Windows suite passed 112 with one platform-specific root-only skip. This
-  task remains open pending unchanged-Compose runtime evidence on the actual
-  CH09 guest. No remote files or containers were changed.
+  task closed after unchanged-Compose recreation on the actual CH09 guest kept
+  the same session/timing database inodes and private root-owned state. The
+  runtime operation changed only the `ch09-brk` container; no remote files or
+  Watchtower state were changed.
 - [x] **T13 — Resolve the human login origin from verified HTTPS requests.**
   Preserve the explicit `BROKER_PUBLIC_ORIGIN` policy when configured. When
   absent, use the exact request Host authority (including external port)
@@ -258,6 +280,26 @@ requested that this arbitrary retention cap be removed.
   disabled/unmanaged. Follow-up local test-only commit `3c7d14a` makes the
   IIS assertion accept LF and CRLF; focused IIS tests passed 6/6 and the full
   Windows suite now passes 106/107 with one root-only test skipped.
+
+- [x] **T15 — Reload renewed TLS credentials without container restart.**
+  Detect changes to the configured certificate/key bytes and replace the live
+  HTTPS server secure context without touching Watchtower or requiring Docker
+  access from Certbot. Keep the last valid context when a partial or invalid
+  renewal is observed, retry later, and avoid logging certificate/key content.
+  Route: direct inline. Trigger: none; one bounded runtime behavior with tests.
+  TDD: applicable; observe a failing deterministic reload test, then GREEN and
+  refactor. Checks: focused TLS reload tests, TypeScript, full suite, Docker
+  build, and an isolated runtime certificate-rotation smoke. Independent
+  verification follows because this changes production TLS behavior. RDD:
+  clone-local disabled/unmanaged.
+  RED: the focused test initially failed because the reload module did not
+  exist. GREEN: TypeScript passed; focused TLS/proxy tests passed 19/19; the
+  full suite passed 113 with one platform-specific skip; Docker image
+  `sha256:c8fce242234dbcbfd635a1befd5504252bc07373f737934c41005b5c5b7a3956`
+  built successfully. An isolated real HTTPS smoke preserved the prior
+  certificate for a partial cert/key pair and activated the complete renewed
+  pair without restarting the server. Independent verification remains due
+  before delivery.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -378,31 +420,16 @@ requested that this arbitrary retention cap be removed.
   Each PR links an approved issue and has exactly one matching `type:*` label.
   All sixteen GitHub CI checks passed after moving the native dependency build
   toolchain into T1; the resulting Dockerfile is unchanged at the final tip.
-- Progress: T1-T8 committed and locally checked. Two independent read-only
-  reviews found a session-revocation bug, secret-bearing ordinary pool/route
-  logs, and a live-timing regression. A local production dependency audit found the
-  critical `proxy-addr` advisory, now patched. The feature-branch-chain is
-  pushed and linked PRs #8-#16 are open; the tracker remains draft. A further
-  read-only review found that expired login attempts and session rows had no
-  scheduled cleanup; T8 corrected this in bounded sweeps. T9 and T11-T14 plus
-  the root-state and central-validation follow-ups are published as clean
-  chained PRs #17-#23; every CI check passed. T10 remains open for image-only
-  runtime acceptance. Fresh read-only NAGES inspection found no CH09-BRK
-  container or image and no `/srv/solinges`; NAGES is therefore not the CH09
-  runtime target without a separate topology/storage decision.
-  Read-only SSH inspection confirmed Lecar guest `ges01` is the actual CH09
-  runtime target. Keep the tracker unmerged until image-only deployment and
-  runtime acceptance are separately authorized and proven.
-  Pushing to `main` publishes Docker Hub `:latest`. The live Broker has
-  `com.centurylinklabs.watchtower.enable=true`, and its healthy Watchtower runs
-  with `--label-enable`; publishing a changed `:latest` is therefore an
-  activation path. Live consumer HTTPS/service-key compatibility remains
-  unverified.
-  Unlimited on-disk history
-  requires operator disk monitoring and backup; clearing remains manual.
-  Activation still requires verifying the actual BackGES htpasswd host path,
-  guest-local storage, machine clients, TLS proxy settings, and existing
-  Watchtower topology. No deployment or remote runtime acceptance claimed.
+- Progress: all implementation units and the root-state and central-validation
+  follow-ups are committed, merged through PR #8 as `ddda15e`, published, and active on Lecar
+  `ges01`. CI, Docker publication, public TLS, human login/session/logout,
+  protected pool access, central MS07 beat validation, guest-local state, and
+  one unchanged-Compose recreation were observed. The final runtime is the
+  expected image with restart count zero and pool 10/0/0 (A=5/B=5). Watchtower
+  was not modified. T10 remains partial only for live routed CA04/CA05 traffic
+  and certificate-renewal evidence. NAGES remains the MS07 target, not the CH09 runtime target.
+  Unlimited on-disk timing history still requires operator disk monitoring and
+  backup; clearing remains manual.
 
 ## Log
 
@@ -475,3 +502,64 @@ requested that this arbitrary retention cap be removed.
   A second read-only inspection confirmed the Broker opt-in label is `true`
   and the healthy Watchtower uses `--label-enable`; a changed published
   `:latest` may therefore activate without a manual Compose operation.
+- 2026-10-13 CH09 main rollout: PRs #23 through #9 were merged in dependency
+  order into the tracker branch after each updated parent passed CI. Tracker
+  PR #8 then passed CI, left draft state, and merged to main as `ddda15e`.
+  GitHub CI and Docker publication run `38497667519` succeeded. Watchtower
+  activated image
+  `sha256:e62e12e74fe103a793fce777fcf56835e003858783242dc8e98c4def5c89e945`
+  without a manual container or Watchtower change. Independent runtime checks
+  found build `1.0.15`, revision `ddda15e21f71`, `gitDirty=false`, running with
+  restart count zero. The state bind is guest-local ext4; `broker-state` is
+  0700/root and its databases, sidecars, and generated key are 0600/root,
+  without reading secret values. Public TLS for `lecar.gotdns.org` validated;
+  login UI returned 200; missing and invalid beat tokens returned 401; a
+  short-lived token generated inside live MS07 passed the CH09 central gate
+  with 200. MS07 remained on `broker-introspection-4dc088e`, running with zero
+  restarts. At that checkpoint, pool 10/0/0, two real logins, and
+  restart/recreation durability remained unverified; no rollback occurred.
+- 2026-10-13 authorized human runtime acceptance: credentials supplied by the
+  user were held only in process environment for stdin-fed probes and were not
+  printed, persisted, or added to the tracker. Both `guillermo.negrete` and
+  `diego.zacur` returned login 200, a secure session cookie, session 200 with
+  the expected username, protected pool 200, and logout 200. The pool reported
+  `ready=10`, `warming=0`, `error=0`, with backend A ready=5 and backend B
+  ready=5. Restart/recreation durability remains the final unverified T10
+  runtime gate.
+- 2026-10-13 authorized recreation durability: during scheduled downtime, one
+  `docker compose up -d --no-deps --force-recreate --pull never broker` was run
+  on Lecar `ges01`, limited to `ch09-brk`. The active authenticated session
+  survived; the service-key identity and session/timing database inodes were
+  unchanged; Compose bytes and Watchtower identity were unchanged; the new
+  container used the same expected image with restart count zero. The first
+  post-recreation pool check reached 9 ready and 1 error because slot 2 warmup
+  returned HTTP 500. No rollback was performed. Before any manual recycle, a
+  later protected pool read returned 10/0/0 with A=5/B=5, so no additional
+  mutation was made. The source's five-minute ping recycle is consistent with
+  automatic recovery, but the cause was not proven from correlated runtime
+  events. Independent read-only verification confirmed the current image,
+  running/restart state, Compose hash, guest-local ext4 backing, private state,
+  and healthy Watchtower; historical Watchtower identity comparison remained
+  parent-observed because the verifier lacked the prior exact values.
+- 2026-10-13 user authorization: "Si si" authorized validating the two remaining
+  T10 points: live routed CA04/CA05 traffic and certificate-renewal evidence.
+  Read-only Lecar inspection found no CA04/CA05 containers and the protected
+  durable timing store contained zero records, so no client traversal can be
+  attributed. The certificate file currently mounted read-only into CH09
+  exactly matches the certificate served by its HTTPS listener and is valid
+  from 2026-10-10 through 2027-01-08. Certbot is running with zero restarts and
+  a periodic `certbot renew` command, but no renewal hook exists. Source
+  inspection confirms CH09 loads TLS credentials only at process startup, so a
+  future renewal would not be consumed until a separate restart. T15 tracks
+  the authorized correction; no certificate, container, Compose, or Watchtower
+  mutation occurred during validation.
+- 2026-10-13 T15 implementation: added a one-minute TLS credential watcher that
+  applies changed certificate/key bytes through the running HTTPS server's
+  secure context. A partial or invalid pair leaves the last valid context
+  active and is retried later; logs contain only the error class. The focused
+  test first failed because the module did not exist, then passed. TypeScript,
+  focused TLS/proxy tests (19/19), the full suite (113 pass, one Windows skip),
+  Docker build, and an isolated real HTTPS certificate-rotation smoke passed.
+  The smoke confirmed the process kept serving the prior certificate during a
+  partial renewal and served the complete replacement without restart. No
+  production certificate, container, Compose, or Watchtower state was changed.
