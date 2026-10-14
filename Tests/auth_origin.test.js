@@ -10,7 +10,7 @@ const bcrypt = require("bcryptjs");
 
 const { certifiedHttpsOrigin } = require("../build/auth/origin");
 const { BrokerAuthService } = require("../build/auth/auth_service");
-const { createAuthHttp, requireSecureTransport } = require("../build/auth/http");
+const { createAuthHttp } = require("../build/auth/http");
 
 const certificatePem = readFileSync(join(__dirname, "fixtures", "broker-origin-cert.pem"));
 const certificate = new X509Certificate(certificatePem);
@@ -38,7 +38,6 @@ async function withApp(options, run) {
     certificatePem: options.certificatePem, publicOrigin: options.publicOrigin });
   const app = express();
   if (options.trustProxy) app.set("trust proxy", ["127.0.0.1"]);
-  app.use(requireSecureTransport);
   const { routes, gate } = createAuthHttp(auth, serviceKey);
   app.use("/auth", routes);
   app.use(gate);

@@ -65,7 +65,6 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
     dotfiles: "allow",
     fallthrough: false
 }));
-app.use(http_2.requireSecureTransport);
 const sslConfig = getSslConfig();
 const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
 const auth = new auth_service_1.BrokerAuthService({

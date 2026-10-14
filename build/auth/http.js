@@ -9,22 +9,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.requireSecureTransport = exports.SERVICE_KEY_HEADER = void 0;
+exports.SERVICE_KEY_HEADER = void 0;
 exports.isMachineRoute = isMachineRoute;
 exports.createAuthHttp = createAuthHttp;
 const node_crypto_1 = require("node:crypto");
 const express_1 = require("express");
 const interms_1 = require("./interms");
 exports.SERVICE_KEY_HEADER = "x-broker-service-api-key";
-const requireSecureTransport = (req, res, next) => {
-    if (req.secure) {
-        next();
-        return;
-    }
-    // Do not redirect: a redirect could forward credentials or service keys.
-    res.status(403).set("Cache-Control", "no-store").json({ error: "HTTPS required" });
-};
-exports.requireSecureTransport = requireSecureTransport;
 function safeNext(value) {
     return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") &&
         !/[\\\r\n]/.test(value) ? value : "/foreign/broker/pool/show";

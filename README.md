@@ -60,14 +60,13 @@ ges01 que NAGES sea alcanzable por HTTPS; si NAGES no responde, el latido falla
 cerrado. Antes de activar, verificá también que AGES conserve su autenticación
 y que los controles del Broker sigan rechazando clientes no autorizados.
 
-El challenge ACME es la única excepción HTTP. Login, sesión, páginas, controles
-de máquina y proxy AGES responden 403 por HTTP, sin redirección que pueda reenviar
-credenciales. Si producción publica solamente el puerto HTTP del contenedor,
-debe existir un terminador TLS confiable delante del Broker y su IP exacta
-debe estar en `BROKER_TRUSTED_PROXY_IPS`; ese proxy debe sobrescribir
-`X-Forwarded-Proto` con `https` únicamente para conexiones TLS y bloquear
-el acceso directo de clientes al puerto interno. Sin TLS directo o ese proxy
-configurado, la instalación falla cerrada para todas las rutas protegidas.
+El Broker acepta tráfico HTTP y HTTPS y no redirige ni rechaza una petición sólo
+por su transporte. Las rutas mantienen sus compuertas propias: AGES decide la
+autorización del proxy, los controles de máquina exigen su credencial y las
+rutas humanas exigen sesión. Para acceso humano con cookies seguras se recomienda
+TLS directo o un terminador TLS confiable; en modo proxy, su IP exacta debe estar
+en `BROKER_TRUSTED_PROXY_IPS` y debe sobrescribir `X-Forwarded-Proto` según el
+transporte real.
 
 `/auth/login` ofrece el acceso humano. Las páginas de pool, timings y
 administración requieren sesión de navegador. Las rutas de proxy AGES bajo

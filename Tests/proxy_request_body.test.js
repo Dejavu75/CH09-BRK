@@ -70,8 +70,7 @@ function createProxy(upstreamUrl, options = {}) {
     "./services/tls_reloader": { startTlsCertificateReload() { return () => {}; } },
     "./auth/auth_service": { BrokerAuthService: class { constructor() { authInitialized = true; } } },
     "./auth/central_beat": { verifyMs07BeatCentrally() {} },
-    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; },
-      requireSecureTransport(_req, _res, next) { next(); } },
+    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; } },
     "./auth/service_key": { loadServiceKey() {
       assert.equal(authInitialized, true, "auth state must be initialized before loading the generated service key");
       return "synthetic-service-key-with-32-bytes";

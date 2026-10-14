@@ -9,7 +9,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 
 const { BrokerAuthService } = require("../build/auth/auth_service");
-const { createAuthHttp, isMachineRoute, requireSecureTransport, SERVICE_KEY_HEADER } = require("../build/auth/http");
+const { createAuthHttp, isMachineRoute, SERVICE_KEY_HEADER } = require("../build/auth/http");
 
 const directory = mkdtempSync(join(tmpdir(), "broker-routes-"));
 const users = join(directory, "users.htpasswd");
@@ -22,7 +22,6 @@ const auth = new BrokerAuthService({ publicOrigin: origin, credentialFile: users
 const { routes, gate } = createAuthHttp(auth, serviceKey, interMsSecret);
 const app = express();
 app.set("trust proxy", "loopback");
-app.use(requireSecureTransport);
 app.use("/auth", routes);
 app.use(gate);
 app.get("/foreign/broker/pool/show", (_req, res) => res.send("private page"));
@@ -169,7 +168,6 @@ test("central validation admits only the exact Broker beat and fails closed", as
   const centralAuth = createAuthHttp(auth, serviceKey, undefined, central);
   const centralApp = express();
   centralApp.set("trust proxy", "loopback");
-  centralApp.use(requireSecureTransport);
   centralApp.use(centralAuth.gate);
   centralApp.get("/foreign/broker/heartbeat/beat", (_req, res) => res.json({ status: "beat" }));
   centralApp.get("/foreign/broker/health", (_req, res) => res.json({ status: "healthy" }));
@@ -243,11 +241,19 @@ test("login session protects pages and CSRF protects mutation and logout", async
   assert.equal((await request("/foreign/broker/pool/show", { headers: { Cookie: cookie } })).status, 401);
 });
 
-test("HTTP denies AGES passthrough as well as Broker controls", async () => {
-  for (const path of ["/ages/autorizar", "/foreign/broker/ages/autorizar",
-    "/foreign/broker/heartbeat/beat", "/ages/pool/show"]) {
-    assert.equal((await request(path, { headers: { "X-Forwarded-Proto": "http" } })).status, 403, path);
-  }
+test("HTTP reaches the existing route authorization gates", async () => {
+  assert.equal((await request("/ages/autorizar", {
+    headers: { "X-Forwarded-Proto": "http" }
+  })).status, 200);
+  assert.equal((await request("/foreign/broker/ages/autorizar", {
+    headers: { "X-Forwarded-Proto": "http" }
+  })).status, 200);
+  assert.equal((await request("/foreign/broker/heartbeat/beat", {
+    headers: { "X-Forwarded-Proto": "http" }
+  })).status, 401);
+  assert.equal((await request("/ages/pool/show", {
+    headers: { "X-Forwarded-Proto": "http" }
+  })).status, 401);
 });
 
 test("login rejects cross-origin attempts and open redirects", async () => {

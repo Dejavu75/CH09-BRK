@@ -7,7 +7,7 @@ import { DoormanController, getFullCors, getServingConfig, registerService } fro
 
 import { BrokerAuthService } from "./auth/auth_service";
 import { verifyMs07BeatCentrally } from "./auth/central_beat";
-import { createAuthHttp, requireSecureTransport } from "./auth/http";
+import { createAuthHttp } from "./auth/http";
 import { loadServiceKey } from "./auth/service_key";
 import { trustedProxyAddresses } from "./auth/trusted_proxy";
 import { BrokerRouter } from "./routes/rou_broker";
@@ -33,7 +33,6 @@ app.use(
     fallthrough: false
   })
 );
-app.use(requireSecureTransport);
 const sslConfig = getSslConfig();
 const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
 const auth = new BrokerAuthService({
