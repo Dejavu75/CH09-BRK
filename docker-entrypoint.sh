@@ -1,6 +1,15 @@
 #!/bin/sh
 set -e
 
+if [ -z "${BROKER_AUTH_DB_PATH:-}" ] && [ -z "${BROKER_TIMINGS_DB_PATH:-}" ]; then
+  node /app/scripts/state_bootstrap.cjs
+  export BROKER_AUTH_DB_PATH=/etc/nages2/logdir/broker-state/sessions.sqlite
+  export BROKER_TIMINGS_DB_PATH=/etc/nages2/logdir/broker-state/timings.sqlite
+fi
+
+# Keep SQLite WAL/SHM sidecars private as well as their database files.
+umask 077
+
 SSH_IDENTITY_REQUIRED="${SSH_IDENTITY_REQUIRED:-false}"
 AGES_SSH_KEY_PATH="${AGES_SSH_KEY_PATH:-/run/secrets/ch09-brk-iis/ch09_brk_iis}"
 SSH_PUBLIC_KEY_PATH="${SSH_PUBLIC_KEY_PATH:-${AGES_SSH_KEY_PATH}.pub}"

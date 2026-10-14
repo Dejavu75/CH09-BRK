@@ -16,8 +16,11 @@ exports.chooseLeastLoadedBackend = chooseLeastLoadedBackend;
 exports.resolveIisAppPoolName = resolveIisAppPoolName;
 require("dotenv/config");
 const child_process_1 = require("child_process");
+const node_crypto_1 = require("node:crypto");
 const fs_1 = require("fs");
+const node_net_1 = require("node:net");
 const util_1 = require("util");
+const timing_store_1 = require("./timing_store");
 const logger_1 = require("../utils/logger");
 const AGES_BASE_URL = (_a = process.env.HAAGES) !== null && _a !== void 0 ? _a : "http://localhost/ages";
 const ASP_NET_SESSION_COOKIE = "ASP.NET_SessionId";
@@ -46,28 +49,34 @@ const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 const initialEndpoints = createInitialEndpoints();
 class AgesConnectionPool {
     constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints, backendConfiguration = resolveBackendConfiguration(process.env, baseUrl), options = {}) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         this.baseUrl = baseUrl;
         this.slots = [];
         this.backendStates = new Map();
+        this.failedSlotRecycles = new Map();
+        this.scheduledBackendRecycles = new Set();
         this.nextSlotId = 1;
         this.nextSlotIndex = 0;
         this.pingSweepRunning = false;
         this.agesHostRestartRunning = false;
         this.agesHostRestartCooldownUntil = 0;
         this.initialWarmupFinished = false;
-        this.traceSequence = 0;
-        this.timingLog = [];
+        this.liveTimings = new Map();
         this.slotWaiters = {
             bigb: [],
             mini: []
         };
         this.growPromises = {};
+        const timingStorePath = (_a = options.timingStorePath) !== null && _a !== void 0 ? _a : process.env.BROKER_TIMINGS_DB_PATH;
+        if (!timingStorePath && process.env.NODE_ENV === "production") {
+            throw new Error("BROKER_TIMINGS_DB_PATH is required in production");
+        }
+        this.timingStore = new timing_store_1.TimingStore(timingStorePath);
         this.backendConfiguration = backendConfiguration;
         backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
-        this.drainTimeoutMs = (_a = options.drainTimeoutMs) !== null && _a !== void 0 ? _a : getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
-        this.pollMs = (_b = options.pollMs) !== null && _b !== void 0 ? _b : 250;
-        this.recycleExecutor = (_c = options.recycleExecutor) !== null && _c !== void 0 ? _c : ((id) => this.recycleBackendAppPool(id));
+        this.drainTimeoutMs = (_b = options.drainTimeoutMs) !== null && _b !== void 0 ? _b : getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
+        this.pollMs = (_c = options.pollMs) !== null && _c !== void 0 ? _c : 250;
+        this.recycleExecutor = (_d = options.recycleExecutor) !== null && _d !== void 0 ? _d : ((id) => this.recycleBackendAppPool(id));
         endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
     }
     warmUp() {
@@ -85,7 +94,7 @@ class AgesConnectionPool {
     }
     runWarmUp() {
         return __awaiter(this, arguments, void 0, function* (options = {}) {
-            var _a, _b;
+            var _a;
             this.initialWarmupFinished = false;
             const warmupSlots = [...this.slots];
             this.backendStates.forEach((backend) => { backend.state = "draining"; });
@@ -105,7 +114,6 @@ class AgesConnectionPool {
                 `n=${this.slots.length}`,
                 `mini=${this.slots.filter((slot) => slot.kind === "mini").length}`,
                 `BigBoy=${this.slots.filter((slot) => slot.kind === "bigb").length}`,
-                `base=${this.baseUrl}`,
                 `host=${getHostFromUrl(this.baseUrl) || "unknown"}`,
                 `proto=${getProtocolFromUrl(this.baseUrl) || "unknown"}`,
                 `ssh=${AGES_SSH_HOST || "unset"}`
@@ -120,7 +128,7 @@ class AgesConnectionPool {
                     (0, logger_1.warn)([
                         `warmup slot fail`,
                         this.formatSlot(slot),
-                        `err=${(_b = slot.lastError) !== null && _b !== void 0 ? _b : "unknown"}`
+                        `err=${slot.lastError ? "upstream-error" : "unknown"}`
                     ].join(" | "));
                     continue;
                 }
@@ -182,17 +190,25 @@ class AgesConnectionPool {
             slots
         };
     }
-    getTimingLog() {
-        return [...this.timingLog].reverse();
+    getTimingLog(cursor) {
+        const page = this.timingStore.page(cursor);
+        if (cursor !== undefined || this.liveTimings.size === 0)
+            return page;
+        const liveRows = [...this.liveTimings.values()]
+            .sort((left, right) => right.brokerInAt.localeCompare(left.brokerInAt) || right.id.localeCompare(left.id))
+            .slice(0, timing_store_1.TimingStore.PAGE_SIZE)
+            .map(trace => (Object.assign({}, trace)));
+        return Object.assign(Object.assign({}, page), { liveRows });
     }
     clearTimingLog() {
-        const cleared = this.timingLog.length;
-        this.timingLog.length = 0;
+        const cleared = this.timingStore.clear();
+        this.liveTimings.clear();
         return {
             status: "ok",
             cleared
         };
     }
+    closeTimingStore() { this.timingStore.close(); }
     request(slotId_1, endpoint_1) {
         return __awaiter(this, arguments, void 0, function* (slotId, endpoint, init = {}) {
             const slot = this.getSlot(slotId);
@@ -268,7 +284,7 @@ class AgesConnectionPool {
         });
     }
     proxyCall(kind_1, functionName_1) {
-        return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "", timingRequest) {
+        return __awaiter(this, arguments, void 0, function* (kind, functionName, queryString = "", init = {}, sourceIp = "", sourceIpSource = "") {
             var _a, _b, _c, _d, _e;
             const brokerInMs = Date.now();
             if (!this.hasReadySlot(kind)) {
@@ -280,13 +296,21 @@ class AgesConnectionPool {
             let damagedSlotRetryAttempt = 0;
             while (true) {
                 const attemptBrokerInMs = Date.now();
-                const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs, timingRequest);
+                const trace = this.createTimingTrace(kind, (_a = init.method) !== null && _a !== void 0 ? _a : "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
                 trace.slotWaitStartAt = new Date().toISOString();
-                const slot = yield this.acquireSlot(kind, {
-                    allowGrow: !this.warmupPromise && !isInternalBeat,
-                    baseOnly: isInternalBeat,
-                    excludeSlotIds: excludedSlotIds
-                });
+                let slot;
+                try {
+                    slot = yield this.acquireSlot(kind, {
+                        allowGrow: !this.warmupPromise && !isInternalBeat,
+                        baseOnly: isInternalBeat,
+                        excludeSlotIds: excludedSlotIds
+                    });
+                }
+                catch (error) {
+                    trace.error = "slot_acquisition_failed";
+                    this.completeTimingTrace(trace);
+                    throw error;
+                }
                 const slotAcquiredMs = Date.now();
                 const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
                 trace.url = this.formatUrl(agesUrl);
@@ -313,7 +337,7 @@ class AgesConnectionPool {
                         agesEndMs = Date.now();
                         trace.agesEndAt = new Date(agesEndMs).toISOString();
                         trace.agesMs = agesStartMs ? agesEndMs - agesStartMs : undefined;
-                        trace.error = formatError(error);
+                        trace.error = "upstream_request_failed";
                         slot.lastError = formatError(error);
                         this.logProxyError(slot, (_c = init.method) !== null && _c !== void 0 ? _c : "GET", agesUrl, sourceIp, sourceIpSource, {
                             error,
@@ -327,9 +351,6 @@ class AgesConnectionPool {
                     const body = Buffer.from(yield response.arrayBuffer());
                     trace.status = response.status;
                     trace.bytes = body.length;
-                    if (isJsonResponse(body)) {
-                        trace.responseJson = truncateUtf8(body, 1024);
-                    }
                     if (!isInternalBeat) {
                         this.recordSlotUse(slot, agesUrl, body);
                     }
@@ -344,7 +365,7 @@ class AgesConnectionPool {
                     }
                     if (response.status === 503) {
                         if (this.backendConfiguration.mode === "dual") {
-                            void this.drainAndRecycleBackend(slot.backendId).catch((error) => (0, logger_1.warn)(`backend recycle fail | ${formatError(error)}`));
+                            void this.drainAndRecycleBackend(slot.backendId).catch((error) => (0, logger_1.warn)(`backend recycle fail | err=${safeErrorName(error)}`));
                         }
                         else {
                             yield this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
@@ -357,7 +378,7 @@ class AgesConnectionPool {
                         slot.agesToken = "";
                         slot.lastError = avfpInvalidObjectReason;
                         slot.status = "error";
-                        trace.error = avfpInvalidObjectReason;
+                        trace.error = "upstream_invalid_object";
                         this.logProxyError(slot, (_e = init.method) !== null && _e !== void 0 ? _e : "GET", agesUrl, sourceIp, sourceIpSource, {
                             status: response.status,
                             responseHeaders: this.responseHeadersToObject(response.headers),
@@ -399,7 +420,7 @@ class AgesConnectionPool {
         });
     }
     completeTraceResponse(traceId, status, bytes) {
-        const trace = this.timingLog.find((item) => item.id === traceId);
+        const trace = this.timingStore.get(traceId);
         if (!trace) {
             return undefined;
         }
@@ -407,6 +428,7 @@ class AgesConnectionPool {
         trace.bytes = bytes;
         trace.brokerOutAt = new Date().toISOString();
         trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
+        this.timingStore.upsert(trace);
         return trace;
     }
     initializeSlot(slot) {
@@ -422,22 +444,29 @@ class AgesConnectionPool {
     }
     initializeSlotTracked(slot) {
         return __awaiter(this, void 0, void 0, function* () {
+            var _a;
             this.clearSlotForWarmup(slot);
             slot.status = "warming";
             slot.lastError = undefined;
             for (let attempt = 1; attempt <= WARMUP_MAX_ATTEMPTS; attempt++) {
+                slot.lastStatusCode = undefined;
                 try {
                     const response = yield this.fetchWarmup(slot);
                     slot.lastStatusCode = response.status;
                     slot.lastInitializedAt = new Date().toISOString();
                     this.captureSessionState(slot, response);
                     slot.warmupResponse = yield response.text();
-                    if (slot.agesToken && slot.aspNetSessionId) {
+                    if (response.ok && slot.agesToken && slot.aspNetSessionId) {
                         slot.status = "ready";
+                        (_a = this.failedSlotRecycles.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.delete(slot.id);
                         this.logSlotReady(slot, attempt);
                         return slot.status;
                     }
-                    if (slot.warmupResponse.trim() === AGES_WARMUP_STARTING_RESPONSE) {
+                    if (!response.ok) {
+                        slot.status = "error";
+                        slot.lastError = `warmup returned status ${response.status}`;
+                    }
+                    else if (slot.warmupResponse.trim() === AGES_WARMUP_STARTING_RESPONSE) {
                         if (attempt === WARMUP_MAX_ATTEMPTS) {
                             slot.status = "starting";
                             return slot.status;
@@ -540,7 +569,7 @@ class AgesConnectionPool {
                 `recycle start`,
                 this.formatSlot(slot),
                 `u=${this.formatUrl(pingUrl)}`,
-                `err=${(_a = slot.lastError) !== null && _a !== void 0 ? _a : "unknown"}`
+                `err=${slot.lastError ? "upstream-error" : "unknown"}`
             ].join(" | "));
             this.clearSlotForWarmup(slot);
             slot.status = "idle";
@@ -559,8 +588,35 @@ class AgesConnectionPool {
                 `recycle fail`,
                 this.formatSlot(slot),
                 `st=${recycledStatus}`,
-                `err=${(_b = slot.lastError) !== null && _b !== void 0 ? _b : "unknown"}`
+                `err=${slot.lastError ? "upstream-error" : "unknown"}`
             ].join(" | "));
+            if (this.backendConfiguration.mode === "dual" && recycledStatus === "error" && slot.lastStatusCode === 500) {
+                const failed = (_a = this.failedSlotRecycles.get(slot.backendId)) !== null && _a !== void 0 ? _a : new Set();
+                failed.add(slot.id);
+                this.failedSlotRecycles.set(slot.backendId, failed);
+                this.scheduleBackendRecycleForFailedSlots(slot.backendId, failed.size);
+            }
+            else {
+                (_b = this.failedSlotRecycles.get(slot.backendId)) === null || _b === void 0 ? void 0 : _b.delete(slot.id);
+            }
+        });
+    }
+    scheduleBackendRecycleForFailedSlots(id, failedCount) {
+        if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle || this.warmupPromise)
+            return;
+        this.scheduledBackendRecycles.add(id);
+        // Defer until the slot's maintenance counter has been released before the directed drain begins.
+        setImmediate(() => {
+            var _a, _b;
+            if (((_b = (_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) < 2) {
+                this.scheduledBackendRecycles.delete(id);
+                return;
+            }
+            void this.drainAndRecycleBackend(id).catch((error) => {
+                (0, logger_1.warn)(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
+            }).finally(() => {
+                this.scheduledBackendRecycles.delete(id);
+            });
         });
     }
     fetchWarmup(slot) {
@@ -590,10 +646,7 @@ class AgesConnectionPool {
             this.formatSlot(slot),
             `u=${this.formatUrl(slot.url)}`,
             `a=${attempt}`,
-            `st=${(_a = slot.lastStatusCode) !== null && _a !== void 0 ? _a : "unknown"}`,
-            `${AGES_TOKEN_HEADER}=${slot.agesToken}`,
-            `${ASP_NET_SESSION_COOKIE}=${slot.aspNetSessionId}`,
-            `response=${slot.warmupResponse}`
+            `st=${(_a = slot.lastStatusCode) !== null && _a !== void 0 ? _a : "unknown"}`
         ].join(" | "));
     }
     logProxyCall(slot, method, url, sourceIp, sourceIpSource) {
@@ -624,8 +677,7 @@ class AgesConnectionPool {
                 `rb=${(_b = detail.requestBodySize) !== null && _b !== void 0 ? _b : 0}`,
                 `reqh=${this.formatHeaderNames(detail.requestHeaders)}`,
                 detail.responseHeaders ? `resh=${this.formatHeaderNames(detail.responseHeaders)}` : "",
-                detail.responsePreview ? `resp=${detail.responsePreview}` : "",
-                detail.error ? `err=${formatError(detail.error)}` : ""
+                detail.error ? `err=${safeErrorName(detail.error)}` : ""
             ]
             : [
                 `proxy err`,
@@ -633,30 +685,29 @@ class AgesConnectionPool {
                 `m=${method}`,
                 `u=${this.formatUrl(url)}`,
                 `st=${(_c = detail.status) !== null && _c !== void 0 ? _c : "fetch-fail"}`,
-                detail.error ? `err=${shortError(detail.error)}` : ""
+                detail.error ? `err=${safeErrorName(detail.error)}` : ""
             ])
             .filter(Boolean)
             .join(" | "));
     }
     logSlotRetry(slot, nextAttempt) {
-        var _a;
         (0, logger_1.warn)([
             `retry`,
             this.formatSlot(slot),
             `u=${this.formatUrl(slot.url)}`,
             `a=${nextAttempt}`,
             `to=${WARMUP_TIMEOUT_MS}`,
-            `err=${(_a = slot.lastError) !== null && _a !== void 0 ? _a : "unknown"}`
+            `err=${slot.lastError ? "upstream-error" : "unknown"}`
         ].join(" | "));
     }
     logSlotError(slot) {
-        var _a, _b;
+        var _a;
         (0, logger_1.warn)([
             `slot err`,
             this.formatSlot(slot),
             `u=${this.formatUrl(slot.url)}`,
             `st=${(_a = slot.lastStatusCode) !== null && _a !== void 0 ? _a : "unknown"}`,
-            `err=${(_b = slot.lastError) !== null && _b !== void 0 ? _b : "unknown"}`
+            `err=${slot.lastError ? "upstream-error" : "unknown"}`
         ].join(" | "));
     }
     captureSessionState(slot, response) {
@@ -820,7 +871,6 @@ class AgesConnectionPool {
     }
     runGrowPool(kind) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a;
             const maxSlots = this.getMaxSlots(kind);
             const kindSlots = this.slots.filter((slot) => slot.kind === kind);
             if (kindSlots.length >= maxSlots) {
@@ -832,7 +882,7 @@ class AgesConnectionPool {
             (0, logger_1.warn)(`pool grow | ${this.formatSlot(slot)} | n=${kindSlots.length + 1} | max=${maxSlots} | hold=${ADAPTIVE_SLOT_HOLD_MS}`);
             const status = yield this.initializeSlot(slot);
             if (status !== "ready") {
-                (0, logger_1.warn)(`pool grow fail | ${this.formatSlot(slot)} | st=${status} | err=${(_a = slot.lastError) !== null && _a !== void 0 ? _a : "unknown"}`);
+                (0, logger_1.warn)(`pool grow fail | ${this.formatSlot(slot)} | st=${status} | err=${slot.lastError ? "upstream-error" : "unknown"}`);
                 this.removeSlot(slot);
                 return undefined;
             }
@@ -937,35 +987,38 @@ class AgesConnectionPool {
     getSlotCount(kind) {
         return this.slots.filter((slot) => slot.kind === kind).length;
     }
-    createTimingTrace(kind, method, url, sourceIp, sourceIpSource, brokerInMs, timingRequest) {
-        var _a;
-        const trace = Object.assign({ id: this.createTraceId(), entryType: "proxy", kind,
-            method, url: this.formatUrl(url), sourceIp,
-            sourceIpSource, brokerInAt: new Date(brokerInMs).toISOString() }, (timingRequest && {
-            requestHeaders: (_a = timingRequest.requestHeaders) === null || _a === void 0 ? void 0 : _a.map((header) => (Object.assign({}, header))),
-            requestBody: timingRequest.requestBody
-        }));
+    createTimingTrace(kind, method, url, sourceIp, sourceIpSource, brokerInMs) {
+        const trace = {
+            id: this.createTraceId(),
+            entryType: "proxy",
+            kind,
+            method,
+            url: this.formatUrl(url),
+            sourceIp: (0, node_net_1.isIP)(sourceIp) ? sourceIp : "",
+            sourceIpSource: ["xff", "xri", "xci", "xofi", "cf", "tci", "envoy", "forwarded", "req", "socket", "broker"].includes(sourceIpSource) ? sourceIpSource : "unknown",
+            brokerInAt: new Date(brokerInMs).toISOString()
+        };
         this.pushTimingTrace(trace);
         return trace;
     }
     pushTimingTrace(trace) {
-        this.timingLog.push(trace);
-        while (this.timingLog.length > 500) {
-            this.timingLog.shift();
-        }
+        if (trace.entryType === "event")
+            this.timingStore.upsert(trace);
+        else
+            this.liveTimings.set(trace.id, trace);
     }
     pushTimingEvent(message, errorDetail) {
         this.pushTimingTrace({
             id: this.createTraceId(),
             entryType: "event",
             method: "EVENT",
-            url: message,
+            url: safeEventLabel(message),
             sourceIp: "system",
             sourceIpSource: "broker",
             brokerInAt: new Date().toISOString(),
             brokerOutAt: new Date().toISOString(),
             totalMs: 0,
-            error: errorDetail
+            error: errorDetail ? "event_error" : undefined
         });
     }
     recordDamagedSlotRetry(slot, reason, attempt, nextSlotWillBeAdaptive) {
@@ -977,13 +1030,13 @@ class AgesConnectionPool {
             `attempt=${attempt}`,
             `next=${nextTarget}`
         ].join(" | ");
-        (0, logger_1.warn)(`${message} | err=${reason}`);
+        (0, logger_1.warn)(`${message} | err=${reason ? "upstream-error" : "unknown"}`);
         this.pushTimingTrace({
             id: this.createTraceId(),
             entryType: "event",
             kind: slot.kind,
             method: "RETRY",
-            url: message,
+            url: safeEventLabel(message),
             sourceIp: "system",
             sourceIpSource: "broker",
             slot: this.formatSlot(slot),
@@ -991,7 +1044,7 @@ class AgesConnectionPool {
             brokerInAt: new Date().toISOString(),
             brokerOutAt: new Date().toISOString(),
             totalMs: 0,
-            error: reason
+            error: reason ? "upstream_invalid_object" : undefined
         });
     }
     recycleDamagedSlot(slot, agesUrl) {
@@ -1000,16 +1053,19 @@ class AgesConnectionPool {
                 yield this.recycleSlot(slot, agesUrl);
             }
             catch (error) {
-                (0, logger_1.warn)(`damaged-slot recycle fail | ${this.formatSlot(slot)} | err=${formatError(error)}`);
+                (0, logger_1.warn)(`damaged-slot recycle fail | ${this.formatSlot(slot)} | err=${safeErrorName(error)}`);
                 this.pushTimingEvent(`damaged-slot recycle fail: ${this.formatSlot(slot)}`, formatError(error));
             }
         });
     }
     completeTimingTrace(trace) {
+        if (!this.liveTimings.delete(trace.id))
+            return;
         if (!trace.brokerOutAt) {
             trace.brokerOutAt = new Date().toISOString();
         }
         trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
+        this.timingStore.upsert(trace);
     }
     buildTraceHeaders(trace) {
         var _a, _b, _c, _d, _e, _f;
@@ -1025,8 +1081,7 @@ class AgesConnectionPool {
         };
     }
     createTraceId() {
-        this.traceSequence = (this.traceSequence + 1) % 1000000;
-        return `${Date.now().toString(36)}-${this.traceSequence.toString().padStart(6, "0")}`;
+        return (0, node_crypto_1.randomUUID)();
     }
     getKindSummary(kind) {
         const slots = this.slots.filter((slot) => slot.kind === kind);
@@ -1107,10 +1162,10 @@ class AgesConnectionPool {
     formatUrl(url) {
         try {
             const parsedUrl = new URL(url);
-            return `${parsedUrl.pathname}${parsedUrl.search}`;
+            return parsedUrl.pathname;
         }
         catch (_a) {
-            return url.replace(this.baseUrl.replace(/\/+$/, ""), "");
+            return url.split("?", 1)[0].replace(this.baseUrl.replace(/\/+$/, ""), "");
         }
     }
     recordSlotUse(slot, agesUrl, body) {
@@ -1182,6 +1237,7 @@ class AgesConnectionPool {
             try {
                 yield this.waitForDrain(slots, `backend ${id}`);
                 backend.state = "recycling";
+                this.failedSlotRecycles.delete(id);
                 yield this.recycleExecutor(id);
                 backend.state = "warming";
                 this.prepareSlotsForWarmup(slots);
@@ -1250,7 +1306,7 @@ class AgesConnectionPool {
                 validateSshPrivateKey(AGES_SSH_KEY_PATH);
             }
             catch (error) {
-                (0, logger_1.warn)(`ages restart skip | reason=${reason} | err=${formatError(error)}`);
+                (0, logger_1.warn)(`ages restart skip | reason=${reason} | err=${safeErrorName(error)}`);
                 return false;
             }
             this.agesHostRestartRunning = true;
@@ -1276,7 +1332,7 @@ class AgesConnectionPool {
                 return true;
             }
             catch (error) {
-                (0, logger_1.warn)(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${formatError(error)}`);
+                (0, logger_1.warn)(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${safeErrorName(error)}`);
                 this.pushTimingEvent(`IIS restart fail: ${reason}`, formatError(error));
                 return false;
             }
@@ -1359,26 +1415,13 @@ function getBodySize(body) {
     }
     return 0;
 }
-function isJsonResponse(body) {
-    try {
-        JSON.parse(body.toString("utf8"));
-        return true;
-    }
-    catch (_a) {
-        return false;
-    }
-}
-function truncateUtf8(body, maxBytes) {
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    for (let length = Math.min(body.length, maxBytes); length >= 0; length--) {
-        try {
-            return decoder.decode(body.subarray(0, length));
-        }
-        catch (_a) {
-            // A byte limit can end inside a multibyte character.
-        }
-    }
-    return "";
+function safeEventLabel(message) {
+    if (message.startsWith("damaged-slot retry"))
+        return "damaged-slot retry";
+    if (message.startsWith("damaged-slot recycle fail"))
+        return "damaged-slot recycle fail";
+    const restart = /^IIS restart (cooldown|start|ok|fail):/.exec(message);
+    return restart ? `IIS restart ${restart[1]}` : "system event";
 }
 function createInitialEndpoints() {
     return [
@@ -1456,8 +1499,10 @@ function isConfigEnabled(name, fallback = false) {
     }
     return ["1", "true", "yes", "on", "enabled"].includes(rawValue.trim().toLowerCase());
 }
-function shortError(error) {
-    return error instanceof Error ? error.message : String(error);
+function safeErrorName(error) {
+    if (!(error instanceof Error))
+        return "Error";
+    return ["AbortError", "TimeoutError", "TypeError", "Error"].includes(error.name) ? error.name : "Error";
 }
 function validateSshPrivateKey(path) {
     let keyStat;
