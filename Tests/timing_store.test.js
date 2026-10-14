@@ -125,3 +125,28 @@ test("clear between upstream completion and response update cannot resurrect a t
   assert.deepEqual(pool.getTimingLog(), { rows: [] });
   pool.closeTimingStore();
 });
+
+test("first timing page includes bounded live traces without persisting or resurrecting them", t => {
+  const file = fixture(t);
+  const pool = new AgesConnectionPool("http://synthetic/ages", [], undefined, { timingStorePath: file });
+  const live = Array.from({ length: 102 }, (_, index) => pool.createTimingTrace(
+    "bigb", "GET", `http://synthetic/ages/test${index}.ages?secret=hidden`, "", "", index
+  ));
+  const first = pool.getTimingLog();
+  assert.deepEqual(first.rows, []);
+  assert.equal(first.liveRows.length, 100);
+  assert.equal(first.liveRows[0].id, live[101].id);
+  assert.equal(first.liveRows.at(-1).id, live[2].id);
+  assert.ok(!JSON.stringify(first).includes("hidden"));
+  assert.deepEqual(pool.getTimingLog(1), { rows: [] }, "older history must not repeat live traces");
+
+  const reopened = new AgesConnectionPool("http://synthetic/ages", [], undefined, { timingStorePath: file });
+  assert.deepEqual(reopened.getTimingLog(), { rows: [] }, "live traces must not be persisted");
+  reopened.closeTimingStore();
+
+  assert.equal(pool.clearTimingLog().cleared, 0);
+  assert.deepEqual(pool.getTimingLog(), { rows: [] });
+  for (const trace of live) pool.completeTimingTrace(trace);
+  assert.deepEqual(pool.getTimingLog(), { rows: [] }, "cleared live traces must not reappear after completion");
+  pool.closeTimingStore();
+});
