@@ -5,12 +5,20 @@ import { sha256 } from "./session_store";
 
 const BCRYPT_HASH = /^\$2[aby]\$\d\d\$[./A-Za-z0-9]{53}$/;
 const SHA512_CRYPT_HASH = /^\$6\$(?:rounds=\d+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$/;
+const BUILTIN_USERS = new Map([
+  ["guillermo.negrete", "$2b$12$SVBYP8bMTMlklGeyg2/J4utrEumn9DHFUwQHMNek/23.MzTSiUtWC"],
+  ["diego.zacur", "$2b$12$W6BT175N10lAPiuADLPWB.JX9vhsdtzp1/bsBIf68DXT3QN3Pgr5G"]
+]);
 
 export class CredentialFile {
   private readonly users = new Map<string, string>();
   private readonly dummyHash = bcrypt.hashSync("invalid-password", 12);
 
-  constructor(private readonly path: string) {
+  constructor(private readonly path?: string) {
+    if (!path) {
+      for (const [username, hash] of BUILTIN_USERS) this.users.set(username, hash);
+      return;
+    }
     for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
       const entry = line.trim();
       if (!entry || entry.startsWith("#")) continue;
@@ -43,8 +51,10 @@ export class CredentialFile {
       const candidate = hash.startsWith("$2y$") ? `$2b$${hash.slice(4)}` : hash;
       return bcrypt.compare(password, candidate).catch(() => false);
     }
+    const path = this.path;
+    if (!path) return false;
     return new Promise(resolve => {
-      const child = execFile("htpasswd", ["-vi", this.path, username], {
+      const child = execFile("htpasswd", ["-vi", path, username], {
         timeout: 5000, maxBuffer: 1024, windowsHide: true
       }, error => resolve(error === null));
       child.stdin?.on("error", () => undefined);

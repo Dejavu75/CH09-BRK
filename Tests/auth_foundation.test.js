@@ -17,6 +17,21 @@ function fixture(extra = {}) {
   return { config, credentialFile, databaseFile, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
+test("built-in Broker accounts need no credential file and reject unknown users", async t => {
+  const users = new CredentialFile();
+  for (const username of ["guillermo.negrete", "diego.zacur"]) {
+    assert.match(users.fingerprint(username), /^[a-f0-9]{64}$/);
+    assert.equal(await users.verify(username, "incorrect-synthetic-password"), false);
+  }
+  assert.equal(users.fingerprint("unknown"), null);
+  assert.equal(await users.verify("unknown", "incorrect-synthetic-password"), false);
+  const { config, cleanup } = fixture({ credentialFile: undefined });
+  const auth = new BrokerAuthService(config);
+  t.after(() => { auth.close(); cleanup(); });
+  assert.equal((await auth.login({ username: "unknown", password: "incorrect-synthetic-password",
+    clientKey: "unknown", origin: config.publicOrigin })).status, 401);
+});
+
 test("htpasswd-format bcrypt records authenticate and malformed files fail closed", async t => {
   const { credentialFile, cleanup } = fixture();
   t.after(cleanup);

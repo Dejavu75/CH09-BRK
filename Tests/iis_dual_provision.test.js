@@ -42,7 +42,7 @@ test("fails closed on unowned resources and records intent before creation", () 
   assert.match(source, /apply-failed-clean/);
   assert.match(source, /apply-cleanup'; Save-Ledger/);
   assert.match(source, /previous Apply requires recovery; run -Mode Rollback/);
-  assert.ok(source.indexOf("try {\n    Backup-WebConfiguration") > source.indexOf("$createdThisRun ="));
+  assert.ok(source.search(/try \{\r?\n    Backup-WebConfiguration/) > source.indexOf("$createdThisRun ="));
 });
 
 test("keeps credentials out of output and persisted fingerprints", () => {
