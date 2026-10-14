@@ -390,8 +390,9 @@ requested that this arbitrary retention cap be removed.
   runtime acceptance. Fresh read-only NAGES inspection found no CH09-BRK
   container or image and no `/srv/solinges`; NAGES is therefore not the CH09
   runtime target without a separate topology/storage decision.
-  Next: identify and authorize the actual CH09 guest before claiming automatic
-  deployment; keep the tracker unmerged until release readiness is proven.
+  Read-only SSH inspection confirmed Lecar guest `ges01` is the actual CH09
+  runtime target. Keep the tracker unmerged until image-only deployment and
+  runtime acceptance are separately authorized and proven.
   Pushing to `main` publishes Docker Hub
   `:latest`, which may be
   activated by Watchtower; live consumer HTTPS/service-key compatibility and
@@ -460,3 +461,13 @@ requested that this arbitrary retention cap be removed.
   blocker recheck. Chained PRs #17-#23 are open, mergeable, each has one
   matching `type:*` label, and every GitHub CI check passed. No CH09 merge or
   deployment occurred.
+- 2026-10-13 Lecar CH09 runtime preflight: the user explicitly authorized
+  read-only SSH through saved alias `lec` to guest `ges01`. Compose project
+  `lecar-ch09` runs `ch09-brk` from `dhzacur/ha_ch09_brk:latest`, image ID
+  `sha256:f9c7fd91bf415ec886c200af7a1ee4eaf8d8ce39b4e71c28cdde7307ef295033`,
+  with restart count zero and no Docker healthcheck. Compose SHA-256 is
+  `0e5f657c28456f99f2e8da45297125ad452f2aac8e7307e284722f8c71e98f6f`.
+  `/srv/solinges` is guest-local ext4 storage. Unauthenticated local HTTPS
+  returned 200 for `/foreign/broker/health` and `/foreign/broker/pool`, and
+  404 for `/pool`. No remote mutation occurred, no secret values were read,
+  Watchtower was not touched, and the temporary SSH tunnel was terminated.
