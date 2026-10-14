@@ -13,6 +13,8 @@ exports.BrokerAuthService = void 0;
 const credentials_1 = require("./credentials");
 const session_store_1 = require("./session_store");
 const logger_1 = require("../utils/logger");
+const node_crypto_1 = require("node:crypto");
+const origin_1 = require("./origin");
 const CLEANUP_INTERVAL_MS = 60000;
 const CLEANUP_BATCH_SIZE = 1000;
 class BrokerAuthService {
@@ -20,11 +22,14 @@ class BrokerAuthService {
         var _a, _b, _c;
         this.attempts = new Map();
         this.attemptsCursor = this.attempts.entries();
-        const parsed = new URL(config.publicOrigin);
-        if (parsed.protocol !== "https:" || parsed.origin !== config.publicOrigin) {
-            throw new Error("publicOrigin must be an exact HTTPS origin");
+        if (config.publicOrigin !== undefined) {
+            const parsed = new URL(config.publicOrigin);
+            if (parsed.protocol !== "https:" || parsed.origin !== config.publicOrigin) {
+                throw new Error("publicOrigin must be an exact HTTPS origin");
+            }
         }
         this.origin = config.publicOrigin;
+        this.certificate = config.certificatePem ? new node_crypto_1.X509Certificate(config.certificatePem) : undefined;
         this.ttl = positive((_a = config.sessionTtlSeconds) !== null && _a !== void 0 ? _a : 30 * 24 * 60 * 60);
         this.limit = positive((_b = config.loginLimit) !== null && _b !== void 0 ? _b : 10);
         this.windowMs = positive((_c = config.loginWindowSeconds) !== null && _c !== void 0 ? _c : 900) * 1000;
@@ -41,9 +46,16 @@ class BrokerAuthService {
         }, CLEANUP_INTERVAL_MS);
         this.cleanupTimer.unref();
     }
+    expectedOrigin(host, secure) {
+        if (this.origin)
+            return this.origin;
+        return secure && this.certificate ? (0, origin_1.certifiedHttpsOrigin)(host, this.certificate) : undefined;
+    }
     login(input_1) {
         return __awaiter(this, arguments, void 0, function* (input, nowMs = Date.now()) {
-            if (input.origin !== this.origin)
+            var _a;
+            const expected = this.expectedOrigin(input.host, (_a = input.secure) !== null && _a !== void 0 ? _a : false);
+            if (!expected || input.origin !== expected)
                 return { status: 403 };
             const key = input.clientKey;
             const attempt = this.attempts.get(key);
@@ -77,18 +89,25 @@ class BrokerAuthService {
             expiresAt, setCookie: (0, session_store_1.cookie)(current.token, this.ttl) };
     }
     verify(input, nowMs = Date.now()) {
+        var _a;
         const current = this.current(input.cookieHeader, nowMs);
         if (!current)
             return { status: 401, setCookie: (0, session_store_1.clearCookie)() };
         const method = input.method.toUpperCase();
+        const expected = this.expectedOrigin(input.host, (_a = input.secure) !== null && _a !== void 0 ? _a : false);
+        if (!expected)
+            return { status: 403 };
         if (!["GET", "HEAD", "OPTIONS"].includes(method) &&
-            (input.origin !== this.origin || !this.validCsrf(input.csrfToken, current.session)))
+            (input.origin !== expected ||
+                !this.validCsrf(input.csrfToken, current.session)))
             return { status: 403 };
         const expiresAt = this.sessions.refresh(current.token, this.ttl, Math.floor(nowMs / 1000));
         return { status: 204, username: current.session.username, expiresAt, setCookie: (0, session_store_1.cookie)(current.token, this.ttl) };
     }
     logout(input, nowMs = Date.now()) {
-        if (input.origin !== this.origin)
+        var _a;
+        const expected = this.expectedOrigin(input.host, (_a = input.secure) !== null && _a !== void 0 ? _a : false);
+        if (!expected || input.origin !== expected)
             return { status: 403 };
         const current = this.current(input.cookieHeader, nowMs);
         if (current && !this.validCsrf(input.csrfToken, current.session))

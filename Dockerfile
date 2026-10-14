@@ -19,6 +19,7 @@ COPY ./build/ ./build/
 
 # Copy startup helper that validates the externally mounted SSH identity.
 COPY ./docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY ./scripts/state_bootstrap.cjs /app/scripts/state_bootstrap.cjs
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Expose necessary ports
