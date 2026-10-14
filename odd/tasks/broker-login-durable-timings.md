@@ -298,8 +298,10 @@ requested that this arbitrary retention cap be removed.
   `sha256:c8fce242234dbcbfd635a1befd5504252bc07373f737934c41005b5c5b7a3956`
   built successfully. An isolated real HTTPS smoke preserved the prior
   certificate for a partial cert/key pair and activated the complete renewed
-  pair without restarting the server. Independent verification remains due
-  before delivery.
+  pair without restarting the server. Work-unit commit `7c0cdc7`. Independent
+  verification passed TypeScript, focused 19/19, full suite 113 pass with one
+  platform-specific skip, Docker build, diff checks, and a fresh real HTTPS
+  rotation probe. Review: disabled/unmanaged.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -563,3 +565,11 @@ requested that this arbitrary retention cap be removed.
   The smoke confirmed the process kept serving the prior certificate during a
   partial renewal and served the complete replacement without restart. No
   production certificate, container, Compose, or Watchtower state was changed.
+- 2026-10-13 T15 independent verification: candidate `7c0cdc7` against baseline
+  `ddda15e` passed TypeScript, focused TLS/proxy tests 19/19, full suite 113
+  pass with one platform-specific skip, diff checks, Docker build, and a fresh
+  real HTTPS rotation probe. Missing, malformed, and partial replacement keys
+  preserved the last valid certificate; a complete matching pair became active
+  on the same process, listener, and port. Captured messages contained only
+  generic status or error-class text. The verifier made no workspace or remote
+  changes. Production Certbot renewal remains a separate runtime observation.
