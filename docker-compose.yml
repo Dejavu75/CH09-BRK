@@ -27,7 +27,7 @@ services:
       BROKER_PUBLIC_ORIGIN: ${BROKER_PUBLIC_ORIGIN:?Set the exact HTTPS Broker origin}
       BROKER_AUTH_DB_PATH: /app/state/sessions.sqlite
       BROKER_TIMINGS_DB_PATH: /app/state/timings.sqlite
-      BROKER_SERVICE_API_KEY: ${BROKER_SERVICE_API_KEY:?Set a random service key with at least 32 bytes}
+      BROKER_SERVICE_API_KEY: ${BROKER_SERVICE_API_KEY:-}
       BROKER_TRUSTED_PROXY_IPS: ${BROKER_TRUSTED_PROXY_IPS:-}
       CERT_PATH_CONTAINER: /app/certificados
     networks:

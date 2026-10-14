@@ -42,7 +42,9 @@ function sameKey(supplied: string | undefined, expected: string): boolean {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export function isMachineRoute(path: string): boolean {
+type BrokerRouteKind = "human" | "machine" | "ages-proxy";
+
+function brokerRouteKind(path: string, method: string): BrokerRouteKind {
   const normalized = path.toLowerCase();
   let route: string;
   if (normalized === "/ages" || normalized.startsWith("/ages/")) {
@@ -50,27 +52,39 @@ export function isMachineRoute(path: string): boolean {
   } else if (normalized === "/foreign/broker" || normalized.startsWith("/foreign/broker/")) {
     route = normalized.slice("/foreign/broker".length).replace(/^\//, "");
   } else {
-    return false;
+    return "human";
   }
-  if (!route) return false;
-  if (isHumanControlRoute(route)) return false;
-  if (route === "health" || route === "heartbeat" || route.startsWith("heartbeat/")) return true;
-  // The Broker router's final catch-all routes proxy arbitrary AGES functions.
-  return true;
+  // Express accepts one optional trailing slash on registered routes.
+  const exactRoute = route.endsWith("/") ? route.slice(0, -1) : route;
+  if (!route || isHumanControlRoute(exactRoute, method)) return "human";
+  if ((exactRoute === "health" && ["GET", "HEAD"].includes(method)) ||
+      exactRoute === "heartbeat" || exactRoute === "heartbeat/beat") return "machine";
+  // Everything else reaches the Broker router's AGES proxy handlers.
+  return "ages-proxy";
 }
 
-function isHumanControlRoute(route: string): boolean {
-  return route === "pool" || route.startsWith("pool/") || route === "ages-host" ||
-    route.startsWith("ages-host/") || route === "iis" || route.startsWith("iis/");
+export function isMachineRoute(path: string, method = "GET"): boolean {
+  return brokerRouteKind(path, method) === "machine";
+}
+
+function isHumanControlRoute(route: string, method: string): boolean {
+  if (["GET", "HEAD"].includes(method) && [
+    "pool", "pool/timings", "pool/timings/show", "pool/show",
+    "ages-host/restart-iis", "iis/restart"
+  ].includes(route)) return true;
+  if (method !== "POST") return false;
+  return ["pool/timings/clear", "pool/warmup", "ages-host/restart-iis", "iis/restart"].includes(route) ||
+    /^pool\/(?:backends\/[^/]+\/drain-recycle|slots\/[^/]+\/recycle)$/.test(route);
 }
 
 function isStateChangingGet(path: string): boolean {
-  const normalized = path.toLowerCase();
+  const normalized = path.toLowerCase().replace(/\/$/, "");
   return ["/foreign/broker/iis/restart", "/foreign/broker/ages-host/restart-iis",
     "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
 }
 
-export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, interMsSecret?: string): {
+export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, interMsSecret?: string,
+  centralVerifier?: (authorization: string | undefined) => Promise<boolean>): {
   routes: Router;
   gate: RequestHandler;
 } {
@@ -141,15 +155,33 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
   });
 
   const gate = (req: Request, res: Response, next: NextFunction): void => {
-    if (isMachineRoute(req.path)) {
+    const routeKind = brokerRouteKind(req.path, req.method);
+    if (routeKind === "ages-proxy") {
+      next();
+      return;
+    }
+    if (routeKind === "machine") {
       const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
-      const signedBeat = scopedBeat && req.method === "GET" &&
-        verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret);
-      if (!sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey) && !signedBeat) {
-        res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+      if (sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey)) {
+        next();
         return;
       }
-      next();
+      const authorization = firstHeader(req.headers.authorization);
+      if (scopedBeat && req.method === "GET" && centralVerifier && authorization) {
+        void centralVerifier(authorization)
+          .then(authorized => {
+            if (authorized) next();
+            else res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+          })
+          .catch(() => res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" }));
+        return;
+      }
+      if (scopedBeat && req.method === "GET" &&
+          verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret)) {
+        next();
+        return;
+      }
+      res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
       return;
     }
     const expectedOrigin = auth.expectedOrigin(requestHost(req), req.secure);
