@@ -17,6 +17,21 @@ function fixture(extra = {}) {
   return { config, credentialFile, databaseFile, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
+test("built-in Broker accounts need no credential file and reject unknown users", async t => {
+  const users = new CredentialFile();
+  for (const username of ["guillermo.negrete", "diego.zacur"]) {
+    assert.match(users.fingerprint(username), /^[a-f0-9]{64}$/);
+    assert.equal(await users.verify(username, "incorrect-synthetic-password"), false);
+  }
+  assert.equal(users.fingerprint("unknown"), null);
+  assert.equal(await users.verify("unknown", "incorrect-synthetic-password"), false);
+  const { config, cleanup } = fixture({ credentialFile: undefined });
+  const auth = new BrokerAuthService(config);
+  t.after(() => { auth.close(); cleanup(); });
+  assert.equal((await auth.login({ username: "unknown", password: "incorrect-synthetic-password",
+    clientKey: "unknown", origin: config.publicOrigin })).status, 401);
+});
+
 test("htpasswd-format bcrypt records authenticate and malformed files fail closed", async t => {
   const { credentialFile, cleanup } = fixture();
   t.after(cleanup);
@@ -136,4 +151,65 @@ test("legacy unbound sessions are removed on database upgrade", t => {
   const upgraded = new Database(databaseFile);
   assert.equal(upgraded.prepare("SELECT count(*) AS n FROM sessions").get().n, 0);
   upgraded.close();
+});
+
+test("auth cleanup removes expired attempts and sessions in bounded batches", async t => {
+  const { config, databaseFile, cleanup } = fixture();
+  const auth = new BrokerAuthService(config);
+  const input = { username: "alice", password: "synthetic-secret", origin: config.publicOrigin };
+  for (const clientKey of ["failed-1", "failed-2", "failed-3"]) {
+    assert.equal((await auth.login({ ...input, clientKey, password: "wrong" }, 0)).status, 401);
+  }
+  const expired1 = await auth.login({ ...input, clientKey: "valid-1" }, 0);
+  const expired2 = await auth.login({ ...input, clientKey: "valid-2" }, 1_000);
+  const active = await auth.login({ ...input, clientKey: "valid-3" }, 50_000);
+  const Database = require("better-sqlite3");
+  const db = new Database(databaseFile, { readonly: true });
+  t.after(() => { db.close(); auth.close(); cleanup(); });
+  const count = () => db.prepare("SELECT count(*) AS n FROM sessions").get().n;
+  assert.equal(auth.attempts.size, 3);
+  assert.equal(count(), 3);
+
+  auth.cleanup(61_000, 1);
+  assert.equal(auth.attempts.size, 2);
+  assert.equal(count(), 2);
+  auth.cleanup(61_000, 1);
+  assert.equal(auth.attempts.size, 1);
+  assert.equal(count(), 1);
+  auth.cleanup(61_000, 1);
+  assert.equal(auth.attempts.size, 0);
+  assert.equal(count(), 1);
+  assert.equal(auth.session(active.setCookie, 61_000).status, 200);
+  assert.equal(auth.session(expired1.setCookie, 61_000).status, 401);
+  assert.equal(auth.session(expired2.setCookie, 61_000).status, 401);
+  assert.throws(() => auth.cleanup(61_000, 0), /batch size/);
+});
+
+test("auth cleanup is scheduled, unrefed, and canceled on close", async t => {
+  const { config, cleanup } = fixture();
+  t.after(cleanup);
+  let sweep;
+  let interval;
+  let unrefed = false;
+  let canceled = false;
+  const timer = { unref: () => { unrefed = true; } };
+  t.mock.method(globalThis, "setInterval", (callback, delay) => {
+    sweep = callback;
+    interval = delay;
+    return timer;
+  });
+  t.mock.method(globalThis, "clearInterval", handle => {
+    assert.equal(handle, timer);
+    canceled = true;
+  });
+  const auth = new BrokerAuthService(config);
+  assert.equal(interval, 60_000);
+  assert.equal(unrefed, true);
+  assert.equal((await auth.login({ username: "alice", password: "wrong",
+    clientKey: "failed", origin: config.publicOrigin }, 0)).status, 401);
+  assert.equal(auth.attempts.size, 1);
+  sweep();
+  assert.equal(auth.attempts.size, 0);
+  auth.close();
+  assert.equal(canceled, true);
 });

@@ -6,7 +6,9 @@ import path from "path";
 import { DoormanController, getFullCors, getServingConfig, registerService } from "se_configbase";
 
 import { BrokerAuthService } from "./auth/auth_service";
+import { verifyMs07BeatCentrally } from "./auth/central_beat";
 import { createAuthHttp, requireSecureTransport } from "./auth/http";
+import { loadServiceKey } from "./auth/service_key";
 import { trustedProxyAddresses } from "./auth/trusted_proxy";
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
@@ -31,12 +33,15 @@ app.use(
   })
 );
 app.use(requireSecureTransport);
+const sslConfig = getSslConfig();
+const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
 const auth = new BrokerAuthService({
-  publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
-  credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),
-  databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
+  publicOrigin: process.env.BROKER_PUBLIC_ORIGIN?.trim() || undefined,
+  certificatePem: sslConfig.ready ? readFileSync(sslConfig.certPath) : undefined,
+  databaseFile: authDatabaseFile
 });
-const authHttp = createAuthHttp(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));
+const serviceKey = loadServiceKey(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
+const authHttp = createAuthHttp(auth, serviceKey, undefined, verifyMs07BeatCentrally);
 app.use("/auth", authHttp.routes);
 app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], raw({ type: () => true, limit: requestBodyLimit }));
@@ -75,8 +80,6 @@ httpServer.listen(config.port, () => {
     agesConnectionPool.startPingMonitor();
   });
 });
-
-const sslConfig = getSslConfig();
 
 if (sslConfig.ready) {
   const httpsServer = https.createServer(
