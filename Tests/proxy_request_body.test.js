@@ -15,7 +15,12 @@ function loadSource(relativePath, dependencies) {
   }).outputText;
   const exports = {};
   vm.runInNewContext(compiled, {
-    exports, Buffer, URL, process: { env: {} },
+    exports, Buffer, URL, process: { env: {
+      BROKER_PUBLIC_ORIGIN: "https://broker.synthetic",
+      BROKER_AUTH_HTPASSWD_PATH: "/synthetic/users",
+      BROKER_AUTH_DB_PATH: "/synthetic/sessions",
+      BROKER_SERVICE_API_KEY: "synthetic-service-key-with-32-bytes"
+    } },
     require(name) {
       if (Object.hasOwn(dependencies, name)) return dependencies[name];
       if (name.startsWith(".") || name === "se_configbase") {
@@ -27,9 +32,11 @@ function loadSource(relativePath, dependencies) {
   return exports;
 }
 
-function createProxy(upstreamUrl) {
+function createProxy(upstreamUrl, options = {}) {
+  let authInitialized = false;
   const pool = {
     async proxyCall(_kind, _name, _query, init) {
+      if (options.proxyError) throw options.proxyError;
       assert.equal(init.headers["content-length"], undefined, "fetch must calculate body length");
       assert.equal(init.headers["transfer-encoding"], undefined, "incoming framing must not be forwarded");
       const response = await fetch(upstreamUrl, { ...init, signal: AbortSignal.timeout(2000) });
@@ -48,8 +55,10 @@ function createProxy(upstreamUrl) {
     },
     "../services/ages_pool": { agesConnectionPool: pool },
     "../services/heartbeat_metadata": { configureHeartbeatExtraData() {} },
-    "../utils/logger": { warn() {} },
-    "../generated/build_info": { BROKER_BUILD_INFO: {} }
+    "../utils/logger": { warn: options.onWarn ?? (() => {}) },
+    "../generated/build_info": { BROKER_BUILD_INFO: {} },
+    "../auth/http": { SERVICE_KEY_HEADER: "x-broker-service-api-key" },
+    "../auth/session_store": { SESSION_COOKIE: "__Host-broker_session" }
   };
   const router = loadSource("routes/rou_broker.ts", dependencies);
   let app;
@@ -58,6 +67,15 @@ function createProxy(upstreamUrl) {
     "./routes/rou_broker": router,
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
+    "./auth/auth_service": { BrokerAuthService: class { constructor() { authInitialized = true; } } },
+    "./auth/central_beat": { verifyMs07BeatCentrally() {} },
+    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; },
+      requireSecureTransport(_req, _res, next) { next(); } },
+    "./auth/service_key": { loadServiceKey() {
+      assert.equal(authInitialized, true, "auth state must be initialized before loading the generated service key");
+      return "synthetic-service-key-with-32-bytes";
+    } },
+    "./auth/trusted_proxy": { trustedProxyAddresses: () => false },
     "./utils/logger": { log() {}, error() {}, isConfigEnabled: () => true },
     http: { createServer(value) { app = value; return { listen() {} }; } }
   });
@@ -125,7 +143,12 @@ for (const prefix of ["/ages", "/foreign/broker/ages"]) {
       });
       const upstreamUrl = await listen(upstream, t);
       const proxyUrl = await listen(createProxy(upstreamUrl), t);
-      const headers = { ...scenario.headers, AGES_USER: "test-user", AGES_PASS: "test-password" };
+      const headers = {
+        ...scenario.headers, AGES_USER: "test-user", AGES_PASS: "test-password",
+        Authorization: "Bearer synthetic-ages-token", "X-AGES-API-Key": "synthetic-ages-key",
+        "X-Broker-Service-Api-Key": "synthetic-broker-key",
+        Cookie: "AGES_SESSION=synthetic-ages-session; __Host-broker_session=synthetic-broker-session"
+      };
       const result = await request(`${proxyUrl}${prefix}/autorizar`, scenario.method ?? "POST", headers, scenario.body, scenario.noFraming);
       assert.equal(result.status, 200, result.body.toString());
       assert.deepEqual(observed.body, expected);
@@ -135,6 +158,43 @@ for (const prefix of ["/ages", "/foreign/broker/ages"]) {
       }
       assert.equal(observed.headers.ages_user, "test-user");
       assert.equal(observed.headers.ages_pass, "test-password");
+      assert.equal(observed.headers.authorization, "Bearer synthetic-ages-token");
+      assert.equal(observed.headers["x-ages-api-key"], "synthetic-ages-key");
+      assert.equal(observed.headers["x-broker-service-api-key"], undefined);
+      assert.equal(observed.headers.cookie, "AGES_SESSION=synthetic-ages-session");
     });
   }
 }
+
+test("unregistered control-like paths reach the AGES catch-all", async t => {
+  const upstream = http.createServer((_req, res) => res.end("proxied"));
+  const upstreamUrl = await listen(upstream, t);
+  const proxyUrl = await listen(createProxy(upstreamUrl), t);
+  for (const target of [
+    { path: "/ages/health/status", method: "GET" },
+    { path: "/foreign/broker/heartbeat/custom", method: "GET" },
+    { path: "/ages/pool/custom", method: "GET" },
+    { path: "/foreign/broker/iis/custom", method: "GET" },
+    { path: "/ages/health", method: "POST" },
+    { path: "/ages/pool/show", method: "POST" }
+  ]) {
+    const result = await request(`${proxyUrl}${target.path}`, target.method, {}, undefined);
+    assert.equal(result.status, 200, `${target.method} ${target.path}`);
+    assert.equal(result.body.toString(), "proxied");
+  }
+});
+
+test("proxy failure log excludes query values and upstream error messages", async t => {
+  const warnings = [];
+  const proxyUrl = await listen(createProxy("http://unused", {
+    proxyError: new Error("secret-upstream-error"),
+    onWarn: message => warnings.push(message)
+  }), t);
+  const response = await request(`${proxyUrl}/ages/autorizar?token=secret-query`, "GET", {}, undefined);
+  assert.equal(response.status, 502);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /u=\/ages\/autorizar/);
+  assert.match(warnings[0], /st=502/);
+  assert.match(warnings[0], /err=Error/);
+  assert.doesNotMatch(warnings[0], /secret-|token=/);
+});

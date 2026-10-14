@@ -12,6 +12,7 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../build/services/ages_
   require(name) {
     if (name === "dotenv/config") return {};
     if (name === "../utils/logger") return { log() {}, warn() {}, sendDebugMail: async () => {} };
+    if (name === "./timing_store") return { TimingStore: require("../build/services/timing_store").TimingStore };
     return require(name);
   }
 });

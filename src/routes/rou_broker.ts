@@ -2,10 +2,12 @@ import { Request, Response, Router } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { getHeartBeat } from "se_configbase";
 
-import { agesConnectionPool, AgesTimingRequest } from "../services/ages_pool";
+import { agesConnectionPool } from "../services/ages_pool";
 import { configureHeartbeatExtraData } from "../services/heartbeat_metadata";
 import { warn } from "../utils/logger";
 import { BROKER_BUILD_INFO } from "../generated/build_info";
+import { SERVICE_KEY_HEADER } from "../auth/http";
+import { SESSION_COOKIE } from "../auth/session_store";
 
 export const BrokerRouter = Router();
 
@@ -34,8 +36,14 @@ BrokerRouter.get("/pool", (_req, res) => {
   res.json(getPublicPoolSummary());
 });
 
-BrokerRouter.get("/pool/timings", (_req, res) => {
-  res.json(agesConnectionPool.getTimingLog());
+BrokerRouter.get("/pool/timings", (req, res) => {
+  const rawCursor = req.query.cursor;
+  if (rawCursor !== undefined && (typeof rawCursor !== "string" || !/^[1-9]\d*$/.test(rawCursor) ||
+    !Number.isSafeInteger(Number(rawCursor)))) {
+    res.status(400).json({ error: "Invalid timing cursor" });
+    return;
+  }
+  res.json(agesConnectionPool.getTimingLog(rawCursor === undefined ? undefined : Number(rawCursor)));
 });
 
 BrokerRouter.post("/pool/timings/clear", (_req, res) => {
@@ -158,7 +166,6 @@ async function restartIis(res: Response): Promise<void> {
 async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Response, agesFunction?: string): Promise<void> {
   try {
     const sourceIp = getSourceIp(req);
-    const timingRequest = getTimingRequest(req);
     const result = await agesConnectionPool.proxyCall(
       kind,
       agesFunction ?? String(req.params.agesFunction),
@@ -169,8 +176,7 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
         body: getProxyBody(req)
       },
       sourceIp.value,
-      sourceIp.source,
-      timingRequest
+      sourceIp.source
     );
 
     setProxyResponseHeaders(res, result.headers);
@@ -184,6 +190,7 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       .send(result.body);
   } catch (error) {
     const sourceIp = getSourceIp(req);
+    const isWarmup = error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message);
     warn(
       [
         `proxy route err`,
@@ -191,14 +198,15 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
         `ip=${sourceIp.value || "unknown"}`,
         `ips=${sourceIp.source || "unknown"}`,
         `m=${req.method}`,
-        `u=${req.originalUrl}`,
+        `u=${req.originalUrl.split("?", 1)[0]}`,
         `h=${Object.keys(req.headers).sort().join(",") || "none"}`,
         `b=${getRequestBodySize(req)}`,
-        `err=${formatRouteError(error)}`
+        `st=${isWarmup ? 503 : 502}`,
+        `err=${safeRouteErrorName(error)}`
       ].join(" | ")
     );
 
-    if (error instanceof Error && /^AGES (mini|bigb) pool is still in warmup$/.test(error.message)) {
+    if (isWarmup && error instanceof Error) {
       res
         .setHeader("Retry-After", "60")
         .status(503)
@@ -214,25 +222,6 @@ async function proxyAgesRequest(kind: "bigb" | "mini", req: Request, res: Respon
       message: error instanceof Error ? error.message : String(error)
     });
   }
-}
-
-function getTimingRequest(req: Request): AgesTimingRequest {
-  const requestHeaders: NonNullable<AgesTimingRequest["requestHeaders"]> = [];
-  for (let index = 0; index < req.rawHeaders.length; index += 2) {
-    requestHeaders.push({ name: req.rawHeaders[index], value: req.rawHeaders[index + 1] });
-  }
-
-  let requestBody = "";
-  if (Buffer.isBuffer(req.body)) {
-    requestBody = req.body.toString("utf8");
-  } else if (typeof req.body === "string") {
-    requestBody = req.body;
-  } else if (req.body !== undefined &&
-    (req.headers["transfer-encoding"] || Number(req.headers["content-length"] ?? 0) > 0)) {
-    requestBody = JSON.stringify(req.body);
-  }
-
-  return { requestHeaders, requestBody };
 }
 
 function translateRestPathToAgesFunction(path: string): string {
@@ -317,14 +306,26 @@ function getProxyHeaders(req: Request): Record<string, string> {
   const headers: Record<string, string> = {};
 
   Object.entries(req.headers).forEach(([key, value]) => {
-    if (value === undefined || ["content-length", "transfer-encoding"].includes(key.toLowerCase())) {
+    if (value === undefined || ["content-length", "transfer-encoding", SERVICE_KEY_HEADER].includes(key.toLowerCase())) {
       return;
     }
 
-    headers[key] = Array.isArray(value) ? value.join(", ") : value;
+    const normalized = Array.isArray(value) ? value.join(", ") : value;
+    if (key.toLowerCase() === "cookie") {
+      const filtered = withoutBrokerSession(normalized);
+      if (filtered) headers[key] = filtered;
+    } else {
+      headers[key] = normalized;
+    }
   });
 
   return headers;
+}
+
+function withoutBrokerSession(value: string): string {
+  return value.split(";").map(part => part.trim())
+    .filter(part => part && part.slice(0, part.indexOf("=") >= 0 ? part.indexOf("=") : part.length).trim() !== SESSION_COOKIE)
+    .join("; ");
 }
 
 function getProxyBody(req: Request): BodyInit | undefined {
@@ -368,6 +369,11 @@ function formatRouteError(error: unknown): string {
   return String(error);
 }
 
+function safeRouteErrorName(error: unknown): string {
+  if (!(error instanceof Error)) return "Error";
+  return ["AbortError", "TimeoutError", "TypeError", "Error"].includes(error.name) ? error.name : "Error";
+}
+
 function setProxyResponseHeaders(res: Response, headers: Record<string, string | string[]>): void {
   const ignoredHeaders = new Set(["connection", "content-encoding", "content-length", "transfer-encoding"]);
 
@@ -391,10 +397,6 @@ function setTraceHeaders(res: Response, headers: Record<string, string>, trace: 
 }
 
 function renderTimingPage(req: Request): string {
-  const rows = agesConnectionPool.getTimingLog();
-  const visibleRows = rows.filter((row) => !isInternalBeatTiming(row));
-  const body = visibleRows.map(renderTimingRow).join("");
-  const json = escapeHtml(JSON.stringify(visibleRows, null, 2));
   const timingsPath = `${req.baseUrl || ""}/pool/timings`;
   const clearTimingsPath = `${req.baseUrl || ""}/pool/timings/clear`;
   const poolShowPath = `${req.baseUrl || ""}/pool/show`;
@@ -441,7 +443,9 @@ function renderTimingPage(req: Request): string {
         <label class="switch"><input id="hideInternalBeat" type="checkbox" checked>Ocultar beat interno</label>
         <button id="copyJson" type="button">Copiar JSON</button>
         <button id="clearTimings" type="button">Limpiar</button>
-        <button onclick="location.reload()">Actualizar</button>
+        <button id="refreshTimings" type="button">Actualizar</button>
+        <button id="newerTimings" type="button" disabled>Ir al inicio</button>
+        <button id="olderTimings" type="button" disabled>Más antiguos</button>
         <span id="copyStatus" class="copy-status"></span>
       </div>
     </header>
@@ -468,12 +472,12 @@ function renderTimingPage(req: Request): string {
             <th>Error</th>
           </tr>
         </thead>
-        <tbody>${body || '<tr><td colspan="17">Sin llamadas registradas.</td></tr>'}</tbody>
+        <tbody><tr><td colspan="17">Cargando...</td></tr></tbody>
       </table>
     </div>
     <details>
-      <summary>JSON completo</summary>
-      <pre>${json}</pre>
+      <summary>JSON de metadatos (sin cuerpos ni credenciales)</summary>
+      <pre>[]</pre>
     </details>
   </main>
   <script>
@@ -485,7 +489,13 @@ function renderTimingPage(req: Request): string {
     const copyJson = document.getElementById("copyJson");
     const copyStatus = document.getElementById("copyStatus");
     const hideInternalBeat = document.getElementById("hideInternalBeat");
+    const newerTimings = document.getElementById("newerTimings");
+    const olderTimings = document.getElementById("olderTimings");
+    const refreshButton = document.getElementById("refreshTimings");
     let timingRows = [];
+    let currentCursor;
+    let nextCursor;
+    let requestVersion = 0;
     const dateFormatter = new Intl.DateTimeFormat(undefined, {
       year: "numeric",
       month: "2-digit",
@@ -562,10 +572,24 @@ function renderTimingPage(req: Request): string {
     }
 
     async function refreshTimings() {
-      const response = await fetch(timingsPath, { headers: { Accept: "application/json" } });
+      const cursor = currentCursor;
+      const version = ++requestVersion;
+      const url = cursor === undefined ? timingsPath : timingsPath + "?cursor=" + cursor;
+      const response = await fetch(url, { headers: { Accept: "application/json" } });
       if (!response.ok) return;
-      timingRows = await response.json();
+      const page = await response.json();
+      if (version !== requestVersion || cursor !== currentCursor) return;
+      timingRows = [...(page.liveRows || []), ...page.rows];
+      nextCursor = page.nextCursor;
+      newerTimings.disabled = currentCursor === undefined;
+      olderTimings.disabled = nextCursor === undefined;
       renderTimings();
+    }
+
+    async function csrfToken() {
+      const response = await fetch("/auth/session", { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("session status " + response.status);
+      return (await response.json()).csrfToken;
     }
 
     function renderTimings() {
@@ -599,7 +623,17 @@ function renderTimingPage(req: Request): string {
     }
 
     refreshTimings();
-    setInterval(refreshTimings, 5000);
+    setInterval(() => { if (currentCursor === undefined) void refreshTimings(); }, 5000);
+    refreshButton.addEventListener("click", refreshTimings);
+    olderTimings.addEventListener("click", async () => {
+      if (nextCursor === undefined) return;
+      currentCursor = nextCursor;
+      await refreshTimings();
+    });
+    newerTimings.addEventListener("click", async () => {
+      currentCursor = undefined;
+      await refreshTimings();
+    });
     hideInternalBeat.addEventListener("change", renderTimings);
     copyJson.addEventListener("click", async () => {
       copyJson.disabled = true;
@@ -615,8 +649,14 @@ function renderTimingPage(req: Request): string {
     clearTimings.addEventListener("click", async () => {
       clearTimings.disabled = true;
       try {
-        await fetch(clearTimingsPath, { method: "POST", headers: { Accept: "application/json" } });
+        const response = await fetch(clearTimingsPath, {
+          method: "POST", headers: { Accept: "application/json", "X-CSRF-Token": await csrfToken() }
+        });
+        if (!response.ok) throw new Error("clear status " + response.status);
+        currentCursor = undefined;
         await refreshTimings();
+      } catch (_error) {
+        showCopyStatus("Error al limpiar");
       } finally {
         clearTimings.disabled = false;
       }
@@ -624,54 +664,6 @@ function renderTimingPage(req: Request): string {
   </script>
 </body>
 </html>`;
-}
-
-function renderTimingRow(row: ReturnType<typeof agesConnectionPool.getTimingLog>[number]): string {
-  const isEvent = row.entryType === "event";
-  const statusClass = isEvent ? "warn" : !row.status ? "warn" : row.status >= 500 ? "bad" : row.status >= 400 ? "warn" : "ok";
-
-  return `<tr>
-    <td class="mono">${escapeHtml(row.id)}</td>
-    <td class="mono">${escapeHtml(row.slot ?? "-")}${row.slotDynamic ? "*" : ""}</td>
-    <td>${isEvent ? "Evento" : row.kind === "mini" ? "Mini" : "BigBoy"}</td>
-    <td class="${statusClass}">${isEvent ? "CUT" : row.status ?? "-"}</td>
-    <td>${escapeHtml(row.method ?? "-")}</td>
-    <td class="url">${escapeHtml(row.url ?? "-")}</td>
-    <td>${escapeHtml(row.sourceIp || "-")} <span class="mono">${escapeHtml(row.sourceIpSource || "")}</span></td>
-    <td class="mono">${escapeHtml(row.brokerInAt)}</td>
-    <td class="mono">${formatOffsetMs(row.brokerInAt, row.slotAcquiredAt)}</td>
-    <td class="mono">${formatOffsetMs(row.brokerInAt, row.agesStartAt)}</td>
-    <td class="mono">${formatOffsetMs(row.brokerInAt, row.agesEndAt)}</td>
-    <td class="mono">${formatOffsetMs(row.brokerInAt, row.brokerOutAt)}</td>
-    <td class="mono">${formatTimingMs(row.waitMs)}</td>
-    <td class="mono">${formatTimingMs(row.agesMs)}</td>
-    <td class="mono">${formatTimingMs(row.totalMs)}</td>
-    <td>${row.bytes ?? "-"}</td>
-    <td>${escapeHtml(row.error ?? "")}</td>
-  </tr>`;
-}
-
-function isInternalBeatTiming(row: ReturnType<typeof agesConnectionPool.getTimingLog>[number]): boolean {
-  return (row.url ?? "").toLowerCase().startsWith("/ages/~mini~/beat.ages");
-}
-
-function formatTimingMs(value?: number): string {
-  return value === undefined ? "-" : `${value} ms`;
-}
-
-function formatOffsetMs(base?: string, value?: string): string {
-  if (!base || !value) {
-    return "-";
-  }
-
-  const baseMs = Date.parse(base);
-  const valueMs = Date.parse(value);
-
-  if (Number.isNaN(baseMs) || Number.isNaN(valueMs)) {
-    return "-";
-  }
-
-  return `+${valueMs - baseMs} ms`;
 }
 
 type PublicPoolSummary = ReturnType<typeof agesConnectionPool.getSummary> & {
@@ -804,6 +796,11 @@ function renderPoolPage(req: Request): string {
     const base = document.getElementById("base");
     const buildInfo = ${JSON.stringify(BROKER_BUILD_INFO)};
     let currentPool = null;
+    async function csrfToken() {
+      const response = await fetch("/auth/session", { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("session status " + response.status);
+      return (await response.json()).csrfToken;
+    }
     const dateFormatter = new Intl.DateTimeFormat(undefined, {
       year: "numeric",
       month: "2-digit",
@@ -989,6 +986,7 @@ function renderPoolPage(req: Request): string {
       }
       statusLine.textContent = "Ejecutando accion...";
       try {
+        headers["X-CSRF-Token"] = await csrfToken();
         const response = await fetch(form.action, { method: form.method || "POST", headers });
         if (!response.ok) throw new Error("accion status " + response.status);
         await refreshPool();

@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a, _b, _c;
+var _a, _b, _c, _d;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importStar(require("express"));
 const fs_1 = require("fs");
@@ -43,6 +43,11 @@ const http_1 = __importDefault(require("http"));
 const https_1 = __importDefault(require("https"));
 const path_1 = __importDefault(require("path"));
 const se_configbase_1 = require("se_configbase");
+const auth_service_1 = require("./auth/auth_service");
+const central_beat_1 = require("./auth/central_beat");
+const http_2 = require("./auth/http");
+const service_key_1 = require("./auth/service_key");
+const trusted_proxy_1 = require("./auth/trusted_proxy");
 const rou_broker_1 = require("./routes/rou_broker");
 const ages_pool_1 = require("./services/ages_pool");
 const heartbeat_metadata_1 = require("./services/heartbeat_metadata");
@@ -54,11 +59,23 @@ const certbotWebroot = (_a = process.env.CERTBOT_WEBROOT) !== null && _a !== voi
 const certificateRoot = (_b = process.env.CERT_PATH_CONTAINER) !== null && _b !== void 0 ? _b : "/app/certificados";
 const configuredRequestBodyLimit = (_c = process.env.REQUEST_BODY_LIMIT) === null || _c === void 0 ? void 0 : _c.trim();
 const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$/i.test(configuredRequestBodyLimit) ? configuredRequestBodyLimit : "100mb";
-app.set("trust proxy", true);
+app.set("trust proxy", (0, trusted_proxy_1.trustedProxyAddresses)(process.env.BROKER_TRUSTED_PROXY_IPS));
 app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroot}/.well-known/acme-challenge`, {
     dotfiles: "allow",
-    fallthrough: true
+    fallthrough: false
 }));
+app.use(http_2.requireSecureTransport);
+const sslConfig = getSslConfig();
+const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
+const auth = new auth_service_1.BrokerAuthService({
+    publicOrigin: ((_d = process.env.BROKER_PUBLIC_ORIGIN) === null || _d === void 0 ? void 0 : _d.trim()) || undefined,
+    certificatePem: sslConfig.ready ? (0, fs_1.readFileSync)(sslConfig.certPath) : undefined,
+    databaseFile: authDatabaseFile
+});
+const serviceKey = (0, service_key_1.loadServiceKey)(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
+const authHttp = (0, http_2.createAuthHttp)(auth, serviceKey, undefined, central_beat_1.verifyMs07BeatCentrally);
+app.use("/auth", authHttp.routes);
+app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: () => true, limit: requestBodyLimit }));
 app.use((0, express_1.json)({ limit: requestBodyLimit }));
 app.disable("x-powered-by");
@@ -88,7 +105,6 @@ httpServer.listen(config.port, () => {
         ages_pool_1.agesConnectionPool.startPingMonitor();
     });
 });
-const sslConfig = getSslConfig();
 if (sslConfig.ready) {
     const httpsServer = https_1.default.createServer({
         cert: (0, fs_1.readFileSync)(sslConfig.certPath),
@@ -173,4 +189,11 @@ function formatSslConfigLog(config) {
         `SSL_CERT_PATH=${(_c = process.env.SSL_CERT_PATH) !== null && _c !== void 0 ? _c : "(unset)"}`,
         `SSL_KEY_PATH=${(_d = process.env.SSL_KEY_PATH) !== null && _d !== void 0 ? _d : "(unset)"}`
     ].join(" | ");
+}
+function requiredEnvironment(name) {
+    var _a;
+    const value = (_a = process.env[name]) === null || _a === void 0 ? void 0 : _a.trim();
+    if (!value)
+        throw new Error(`${name} is required`);
+    return value;
 }
