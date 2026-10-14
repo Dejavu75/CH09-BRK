@@ -393,10 +393,11 @@ requested that this arbitrary retention cap be removed.
   Read-only SSH inspection confirmed Lecar guest `ges01` is the actual CH09
   runtime target. Keep the tracker unmerged until image-only deployment and
   runtime acceptance are separately authorized and proven.
-  Pushing to `main` publishes Docker Hub
-  `:latest`, which may be
-  activated by Watchtower; live consumer HTTPS/service-key compatibility and
-  Watchtower scope are unverified.
+  Pushing to `main` publishes Docker Hub `:latest`. The live Broker has
+  `com.centurylinklabs.watchtower.enable=true`, and its healthy Watchtower runs
+  with `--label-enable`; publishing a changed `:latest` is therefore an
+  activation path. Live consumer HTTPS/service-key compatibility remains
+  unverified.
   Unlimited on-disk history
   requires operator disk monitoring and backup; clearing remains manual.
   Activation still requires verifying the actual BackGES htpasswd host path,
@@ -471,3 +472,6 @@ requested that this arbitrary retention cap be removed.
   returned 200 for `/foreign/broker/health` and `/foreign/broker/pool`, and
   404 for `/pool`. No remote mutation occurred, no secret values were read,
   Watchtower was not touched, and the temporary SSH tunnel was terminated.
+  A second read-only inspection confirmed the Broker opt-in label is `true`
+  and the healthy Watchtower uses `--label-enable`; a changed published
+  `:latest` may therefore activate without a manual Compose operation.
