@@ -531,7 +531,7 @@ function renderTimingPage(req) {
       if (!response.ok) return;
       const page = await response.json();
       if (version !== requestVersion || cursor !== currentCursor) return;
-      timingRows = page.rows;
+      timingRows = [...(page.liveRows || []), ...page.rows];
       nextCursor = page.nextCursor;
       newerTimings.disabled = currentCursor === undefined;
       olderTimings.disabled = nextCursor === undefined;

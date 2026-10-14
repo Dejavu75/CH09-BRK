@@ -139,7 +139,9 @@ test("timing API validates keyset cursors and page HTML does not load history ea
   const pool = {
     getTimingLog(cursor) {
       cursors.push(cursor);
-      return { rows: [{ id: "synthetic-trace" }], nextCursor: 10 };
+      return cursor === undefined
+        ? { rows: [{ id: "synthetic-trace" }], liveRows: [{ id: "synthetic-live" }], nextCursor: 10 }
+        : { rows: [{ id: "synthetic-older" }] };
     }
   };
   const app = express();
@@ -148,13 +150,16 @@ test("timing API validates keyset cursors and page HTML does not load history ea
   const html = await (await fetch(`${url}/foreign/broker/pool/timings/show`)).text();
   assert.match(html, /Más antiguos/);
   assert.match(html, /page\.rows/);
+  assert.match(html, /page\.liveRows/);
   assert.deepEqual(cursors, [], "the HTML response must not scan timing history");
 
   const first = await (await fetch(`${url}/foreign/broker/pool/timings`)).json();
   assert.equal(first.rows.length, 1);
+  assert.deepEqual(first.liveRows, [{ id: "synthetic-live" }]);
   assert.equal(first.nextCursor, 10);
   const older = await (await fetch(`${url}/foreign/broker/pool/timings?cursor=10`)).json();
   assert.equal(older.rows.length, 1);
+  assert.equal(older.liveRows, undefined);
   assert.deepEqual(cursors, [undefined, 10]);
   for (const cursor of ["0", "-1", "abc", "1.5", "9007199254740992"]) {
     assert.equal((await fetch(`${url}/foreign/broker/pool/timings?cursor=${cursor}`)).status, 400);
