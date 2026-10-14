@@ -83,7 +83,8 @@ function isStateChangingGet(path: string): boolean {
     "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
 }
 
-export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, interMsSecret?: string): {
+export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, interMsSecret?: string,
+  centralVerifier?: (authorization: string | undefined) => Promise<boolean>): {
   routes: Router;
   gate: RequestHandler;
 } {
@@ -161,13 +162,26 @@ export function createAuthHttp(auth: BrokerAuthService, serviceKey: string, inte
     }
     if (routeKind === "machine") {
       const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
-      const signedBeat = scopedBeat && req.method === "GET" &&
-        verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret);
-      if (!sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey) && !signedBeat) {
-        res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+      if (sameKey(firstHeader(req.headers[SERVICE_KEY_HEADER]), serviceKey)) {
+        next();
         return;
       }
-      next();
+      const authorization = firstHeader(req.headers.authorization);
+      if (scopedBeat && req.method === "GET" && centralVerifier && authorization) {
+        void centralVerifier(authorization)
+          .then(authorized => {
+            if (authorized) next();
+            else res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+          })
+          .catch(() => res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" }));
+        return;
+      }
+      if (scopedBeat && req.method === "GET" &&
+          verifyMs07BeatBearer(firstHeader(req.headers.authorization), interMsSecret)) {
+        next();
+        return;
+      }
+      res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
       return;
     }
     const expectedOrigin = auth.expectedOrigin(requestHost(req), req.secure);
