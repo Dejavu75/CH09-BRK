@@ -17,8 +17,10 @@ function validateMount(mountPath, mountInfo) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(mountPath) !== mountPath) {
     throw new Error("Broker log mount must be a real directory");
   }
+  // A root-run container may use an operator-owned bind mount. Its owner is
+  // trusted to control the parent directory; the state child stays root-owned.
   if (typeof process.getuid === "function" &&
-      (stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0)) {
+      ((process.getuid() !== 0 && stat.uid !== process.getuid()) || (stat.mode & 0o022) !== 0)) {
     throw new Error("Broker log mount is owned or writable by an untrusted user");
   }
   const entries = mountInfo.split("\n").filter(Boolean).map(line => {

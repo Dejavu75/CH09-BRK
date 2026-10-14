@@ -26,7 +26,7 @@ npm run build
 
 La imagen incluye dos cuentas generales de Broker: `guillermo.negrete` y `diego.zacur`. Sus contraseñas no se documentan ni se incluyen en texto plano en la imagen; el Broker verifica hashes bcrypt. BackGES no se modifica ni se usa como fuente de usuarios. No hace falta crear ni montar un archivo htpasswd al instalar el Broker. Las cuentas son iguales en todas las instalaciones, de modo que deben tratarse como credenciales compartidas entre empresas.
 
-`BROKER_STATE_HOST_PATH` debe ser un directorio persistente y privado del guest `ges01`, por ejemplo `/srv/solinges/ecosystem/ch09-brk/state` (modo 0700). Los archivos `sessions.sqlite` y `timings.sqlite` viven allí; conservar el directorio entero, incluidos los posibles archivos SQLite WAL/SHM, al recrear el contenedor. El bind mount usa `create_host_path: false` para impedir que Docker cree silenciosamente un directorio equivocado. En una instalación no Compose, configurar las rutas internas `BROKER_AUTH_DB_PATH` y `BROKER_TIMINGS_DB_PATH`. Si ambas rutas faltan, la imagen usa `/etc/nages2/logdir/broker-state` exclusivamente cuando `/etc/nages2/logdir` es un mountpoint exacto, escribible, sin symlinks, con un tipo de filesystem local permitido y cuyo propietario sea el UID del proceso; el mount tampoco puede ser escribible por grupo u otros usuarios, y el subdirectorio privado debe pertenecer al mismo UID. De lo contrario aborta antes de abrir SQLite. Si sólo falta una ruta, la configuración sigue incompleta y no se aplica el fallback. No se cambia el modo del directorio compartido de logs; el subdirectorio privado usa 0700 y la máscara de creación 077 protege los sidecars. Esta comprobación dentro del contenedor NO demuestra que el origen del bind esté realmente en el disco guest-local: Compose con bind corto puede crear un directorio vacío, y la rotación de logs podría eliminar el estado. Verificar el origen y la persistencia al instalar. La ausencia de clave de servicio o estado escribible impide el arranque; sin origen explícito o certificado local verificable, el acceso humano falla cerrado.
+`BROKER_STATE_HOST_PATH` debe ser un directorio persistente y privado del guest `ges01`, por ejemplo `/srv/solinges/ecosystem/ch09-brk/state` (modo 0700). Los archivos `sessions.sqlite` y `timings.sqlite` viven allí; conservar el directorio entero, incluidos los posibles archivos SQLite WAL/SHM, al recrear el contenedor. El bind mount usa `create_host_path: false` para impedir que Docker cree silenciosamente un directorio equivocado. En una instalación no Compose, configurar las rutas internas `BROKER_AUTH_DB_PATH` y `BROKER_TIMINGS_DB_PATH`. Si ambas rutas faltan, la imagen usa `/etc/nages2/logdir/broker-state` exclusivamente cuando `/etc/nages2/logdir` es un mountpoint exacto, escribible, sin symlinks, con un tipo de filesystem local permitido y cuyo propietario sea el UID del proceso o, si el Broker corre como root, el operador confiable del volumen; el mount tampoco puede ser escribible por grupo u otros usuarios, y el subdirectorio privado debe pertenecer al mismo UID. De lo contrario aborta antes de abrir SQLite. Si sólo falta una ruta, la configuración sigue incompleta y no se aplica el fallback. No se cambia el modo del directorio compartido de logs; el subdirectorio privado usa 0700 y la máscara de creación 077 protege los sidecars. Esta comprobación dentro del contenedor NO demuestra que el origen del bind esté realmente en el disco guest-local: Compose con bind corto puede crear un directorio vacío, y la rotación de logs podría eliminar el estado. Verificar el origen y la persistencia al instalar. El propietario del directorio de logs puede reemplazar el subdirectorio de estado, incluso si éste pertenece a root y tiene modo 0700; por eso aceptalo sólo si confiás en ese operador. Si no configurás `BROKER_SERVICE_API_KEY`, el Broker genera una clave aleatoria y la conserva como `service-api-key` dentro del estado privado. Un estado ausente o inseguro impide el arranque; sin origen explícito o certificado local verificable, el acceso humano falla cerrado.
 
 Configurar `BROKER_PUBLIC_ORIGIN` con el origen HTTPS exacto que usa el
 navegador (esquema, host y puerto si corresponde, sin barra final). Si falta,
@@ -41,24 +41,24 @@ preserve el `Host` público, sobrescriba `X-Forwarded-Proto` y bloquee acceso
 directo al puerto interno. Si el certificado existe sólo en el proxy externo,
 configurar `BROKER_PUBLIC_ORIGIN` explícitamente. El certificado local se
 recarga al reiniciar el Broker. Generar
-`BROKER_SERVICE_API_KEY` como secreto aleatorio de al menos 32 bytes,
-guardarlo fuera de Git y enviarlo en `X-Broker-Service-Api-Key` desde los
-consumidores automatizados de los controles del Broker, como health y heartbeat. Las
-llamadas que el Broker sólo retransmite a AGES no usan esta clave. Alternativamente, sólo
-`GET /foreign/broker/heartbeat/beat` acepta `Authorization: Bearer <token>`
-firmado por MS07 con HMAC-SHA256, issuer `solinges-ecosystem`, identidad
-firmada `MSCODE=MS07`, audiencia
-exacta `broker` y scope `broker:beat`. Esta opción requiere configurar
-`INTER_MS_AUTH_SECRET` en el Broker con el mismo secreto seguro (mínimo 32
-bytes) que el firmante MS07; sin él, el token se rechaza y continúa vigente
-la clave de servicio. Los tokens inter-MS no conceden autoridad del Broker en
-el proxy AGES, health ni otras rutas; el proxy conserva los headers destinados
-a AGES sin registrar el token o el secreto. Esto todavía no resuelve
-la instalación sin configuración previa: falta una fuente segura compartida
-del secreto y validar los consumidores de controles del Broker. No reutilizar la
-clave de administración anterior. Antes de activar, verificar que las peticiones
-AGES conservan su autenticación al llegar al upstream y que los controles del
-Broker siguen rechazando clientes no autorizados.
+`BROKER_SERVICE_API_KEY` puede proporcionarse explícitamente con al menos 32
+bytes. Si falta, la imagen crea una clave de ese tamaño en el estado persistente
+privado. Los consumidores autorizados de controles de máquina la envían en
+`X-Broker-Service-Api-Key`; las llamadas que el Broker sólo retransmite a AGES
+no la usan. Nunca publiques la clave ni la incluyas en Git.
+
+Sólo `GET /foreign/broker/heartbeat/beat` admite el Bearer emitido por MS07.
+El Broker lo consulta mediante HTTPS en
+`https://ec.solinges.com.ar/healthmonitor/heartbeat/broker-beat/validate`:
+exige respuesta explícita `{ "valid": true }`, no sigue redirecciones y niega
+el latido ante timeout, error o respuesta ambigua. MS07 verifica firma HMAC,
+issuer `solinges-ecosystem`, identidad `MS07`, audiencia exacta `broker`,
+scope `broker:beat` y vigencia. El secreto HMAC permanece fuera del Broker; no
+hace falta distribuirlo a cada ges01. Los Bearer no habilitan otras rutas del
+Broker. Desplegá primero el endpoint de validación en MS07 y verificá desde
+ges01 que NAGES sea alcanzable por HTTPS; si NAGES no responde, el latido falla
+cerrado. Antes de activar, verificá también que AGES conserve su autenticación
+y que los controles del Broker sigan rechazando clientes no autorizados.
 
 El challenge ACME es la única excepción HTTP. Login, sesión, páginas, controles
 de máquina y proxy AGES responden 403 por HTTP, sin redirección que pueda reenviar

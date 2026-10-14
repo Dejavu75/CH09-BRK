@@ -44,7 +44,9 @@ const https_1 = __importDefault(require("https"));
 const path_1 = __importDefault(require("path"));
 const se_configbase_1 = require("se_configbase");
 const auth_service_1 = require("./auth/auth_service");
+const central_beat_1 = require("./auth/central_beat");
 const http_2 = require("./auth/http");
+const service_key_1 = require("./auth/service_key");
 const trusted_proxy_1 = require("./auth/trusted_proxy");
 const rou_broker_1 = require("./routes/rou_broker");
 const ages_pool_1 = require("./services/ages_pool");
@@ -64,12 +66,14 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
 }));
 app.use(http_2.requireSecureTransport);
 const sslConfig = getSslConfig();
+const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
 const auth = new auth_service_1.BrokerAuthService({
     publicOrigin: ((_d = process.env.BROKER_PUBLIC_ORIGIN) === null || _d === void 0 ? void 0 : _d.trim()) || undefined,
     certificatePem: sslConfig.ready ? (0, fs_1.readFileSync)(sslConfig.certPath) : undefined,
-    databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
+    databaseFile: authDatabaseFile
 });
-const authHttp = (0, http_2.createAuthHttp)(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"), process.env.INTER_MS_AUTH_SECRET);
+const serviceKey = (0, service_key_1.loadServiceKey)(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
+const authHttp = (0, http_2.createAuthHttp)(auth, serviceKey, undefined, central_beat_1.verifyMs07BeatCentrally);
 app.use("/auth", authHttp.routes);
 app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], (0, express_1.raw)({ type: () => true, limit: requestBodyLimit }));

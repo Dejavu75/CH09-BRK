@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { bootstrapStatePaths } = require("../scripts/state_bootstrap.cjs");
+const { bootstrapStatePaths, validateMount } = require("../scripts/state_bootstrap.cjs");
 const { SessionStore } = require("../build/auth/session_store");
 const { TimingStore } = require("../build/services/timing_store");
 
@@ -18,6 +18,46 @@ function mountInfo(mountPath, type = "ext4", mode = "rw") {
   const encoded = mountPath.replace(/ /g, "\\040");
   return `100 99 8:1 / ${encoded} ${mode},relatime - ${type} /dev/sda1 ${mode},errors=remount-ro\n`;
 }
+
+test("root accepts an operator-owned private log mount without changing its owner", t => {
+  const mountPath = fixture(t);
+  fs.mkdirSync(mountPath);
+  const originalGetuid = process.getuid;
+  const originalLstat = fs.lstatSync;
+  const child = path.join(mountPath, "broker-state");
+  let mountMode = 0o750;
+  let stateOwner;
+  process.getuid = () => 0;
+  fs.lstatSync = pathToStat => {
+    const stat = originalLstat(pathToStat);
+    if (pathToStat === mountPath) {
+      return Object.assign(Object.create(stat), { uid: 1000, mode: (stat.mode & ~0o777) | mountMode });
+    }
+    if (pathToStat === child && stateOwner !== undefined) {
+      return Object.assign(Object.create(stat), { uid: stateOwner });
+    }
+    return stat;
+  };
+  t.after(() => {
+    fs.lstatSync = originalLstat;
+    if (originalGetuid) process.getuid = originalGetuid;
+    else delete process.getuid;
+  });
+
+  assert.doesNotThrow(() => validateMount(mountPath, mountInfo(mountPath)));
+  assert.equal(bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }).auth,
+    path.join(child, "sessions.sqlite"));
+  assert.equal(originalLstat(child).uid, originalGetuid?.() ?? 0);
+  mountMode = 0o770;
+  assert.throws(() => validateMount(mountPath, mountInfo(mountPath)), /untrusted user/);
+  mountMode = 0o750;
+  process.getuid = () => 2000;
+  assert.throws(() => validateMount(mountPath, mountInfo(mountPath)), /untrusted user/);
+  process.getuid = () => 0;
+  stateOwner = 1000;
+  assert.throws(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }),
+    /owned by another user/);
+});
 
 test("defaults need an exact, writable, local, non-symlinked log mount", t => {
   const mountPath = fixture(t);
@@ -49,7 +89,7 @@ test("only two absent paths receive private defaults; explicit paths stay untouc
   if (process.platform !== "win32") assert.equal(fs.statSync(child).mode & 0o777, 0o700);
 });
 
-test("foreign-owned state and writable or foreign-owned log root fail closed", {
+test("foreign-owned state and writable log root fail closed, operator-owned root is accepted", {
   skip: typeof process.getuid !== "function" || process.getuid() !== 0
 }, t => {
   const mountPath = fixture(t);
@@ -63,7 +103,7 @@ test("foreign-owned state and writable or foreign-owned log root fail closed", {
   assert.throws(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }), /untrusted user/);
   fs.chmodSync(mountPath, 0o755);
   fs.chownSync(mountPath, 12345, 12345);
-  assert.throws(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }), /untrusted user/);
+  assert.doesNotThrow(() => bootstrapStatePaths({}, { mountPath, mountInfo: mountInfo(mountPath) }));
 });
 
 test("default databases reopen and durable clear survives restart", t => {

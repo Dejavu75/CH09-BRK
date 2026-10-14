@@ -33,6 +33,7 @@ function loadSource(relativePath, dependencies) {
 }
 
 function createProxy(upstreamUrl, options = {}) {
+  let authInitialized = false;
   const pool = {
     async proxyCall(_kind, _name, _query, init) {
       if (options.proxyError) throw options.proxyError;
@@ -66,9 +67,14 @@ function createProxy(upstreamUrl, options = {}) {
     "./routes/rou_broker": router,
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
-    "./auth/auth_service": { BrokerAuthService: class {} },
+    "./auth/auth_service": { BrokerAuthService: class { constructor() { authInitialized = true; } } },
+    "./auth/central_beat": { verifyMs07BeatCentrally() {} },
     "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; },
       requireSecureTransport(_req, _res, next) { next(); } },
+    "./auth/service_key": { loadServiceKey() {
+      assert.equal(authInitialized, true, "auth state must be initialized before loading the generated service key");
+      return "synthetic-service-key-with-32-bytes";
+    } },
     "./auth/trusted_proxy": { trustedProxyAddresses: () => false },
     "./utils/logger": { log() {}, error() {}, isConfigEnabled: () => true },
     http: { createServer(value) { app = value; return { listen() {} }; } }

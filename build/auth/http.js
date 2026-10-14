@@ -89,7 +89,7 @@ function isStateChangingGet(path) {
     return ["/foreign/broker/iis/restart", "/foreign/broker/ages-host/restart-iis",
         "/ages/iis/restart", "/ages/ages-host/restart-iis"].includes(normalized);
 }
-function createAuthHttp(auth, serviceKey, interMsSecret) {
+function createAuthHttp(auth, serviceKey, interMsSecret, centralVerifier) {
     if (Buffer.byteLength(serviceKey, "utf8") < 32) {
         throw new Error("BROKER_SERVICE_API_KEY must contain at least 32 bytes");
     }
@@ -166,13 +166,28 @@ function createAuthHttp(auth, serviceKey, interMsSecret) {
         }
         if (routeKind === "machine") {
             const scopedBeat = req.path.toLowerCase() === "/foreign/broker/heartbeat/beat";
-            const signedBeat = scopedBeat && req.method === "GET" &&
-                (0, interms_1.verifyMs07BeatBearer)(firstHeader(req.headers.authorization), interMsSecret);
-            if (!sameKey(firstHeader(req.headers[exports.SERVICE_KEY_HEADER]), serviceKey) && !signedBeat) {
-                res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+            if (sameKey(firstHeader(req.headers[exports.SERVICE_KEY_HEADER]), serviceKey)) {
+                next();
                 return;
             }
-            next();
+            const authorization = firstHeader(req.headers.authorization);
+            if (scopedBeat && req.method === "GET" && centralVerifier && authorization) {
+                void centralVerifier(authorization)
+                    .then(authorized => {
+                    if (authorized)
+                        next();
+                    else
+                        res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
+                })
+                    .catch(() => res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" }));
+                return;
+            }
+            if (scopedBeat && req.method === "GET" &&
+                (0, interms_1.verifyMs07BeatBearer)(firstHeader(req.headers.authorization), interMsSecret)) {
+                next();
+                return;
+            }
+            res.status(401).set("Cache-Control", "no-store").json({ error: "Unauthorized" });
             return;
         }
         const expectedOrigin = auth.expectedOrigin(requestHost(req), req.secure);
