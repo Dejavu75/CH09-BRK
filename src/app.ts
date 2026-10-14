@@ -13,7 +13,8 @@ import { trustedProxyAddresses } from "./auth/trusted_proxy";
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
 import { configureHeartbeatExtraData } from "./services/heartbeat_metadata";
-import { error, isConfigEnabled, log } from "./utils/logger";
+import { startTlsCertificateReload } from "./services/tls_reloader";
+import { error, isConfigEnabled, log, warn } from "./utils/logger";
 
 configureHeartbeatExtraData();
 
@@ -82,13 +83,22 @@ httpServer.listen(config.port, () => {
 });
 
 if (sslConfig.ready) {
+  const tlsCredentials = {
+    cert: readFileSync(sslConfig.certPath),
+    key: readFileSync(sslConfig.keyPath)
+  };
   const httpsServer = https.createServer(
-    {
-      cert: readFileSync(sslConfig.certPath),
-      key: readFileSync(sslConfig.keyPath)
-    },
+    tlsCredentials,
     app
   );
+  const stopTlsReload = startTlsCertificateReload(httpsServer, {
+    certPath: sslConfig.certPath,
+    keyPath: sslConfig.keyPath,
+    initialCredentials: tlsCredentials,
+    onReload: log,
+    onError: warn
+  });
+  httpsServer.once("close", stopTlsReload);
 
   httpsServer.listen(sslConfig.port, () => {
     log(`CH09-BRK HTTPS Server running on port ${sslConfig.port} | cert=${sslConfig.certPath}`);
