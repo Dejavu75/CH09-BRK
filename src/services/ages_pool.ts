@@ -1,9 +1,12 @@
 import "dotenv/config";
 
 import { execFile } from "child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "fs";
+import { isIP } from "node:net";
 import { promisify } from "util";
 
+import { TimingStore } from "./timing_store";
 import { log, sendDebugMail, warn } from "../utils/logger";
 
 const AGES_BASE_URL = process.env.HAAGES ?? "http://localhost/ages";
@@ -74,9 +77,6 @@ export type AgesTimingTrace = {
   url?: string;
   sourceIp?: string;
   sourceIpSource?: string;
-  requestHeaders?: Array<{ name: string; value: string }>;
-  requestBody?: string;
-  responseJson?: string;
   slot?: string;
   slotDynamic?: boolean;
   status?: number;
@@ -92,8 +92,6 @@ export type AgesTimingTrace = {
   agesMs?: number;
   totalMs?: number;
 };
-
-export type AgesTimingRequest = Pick<AgesTimingTrace, "requestHeaders" | "requestBody">;
 
 type AgesPoolSlot = {
   id: number;
@@ -194,8 +192,8 @@ export class AgesConnectionPool {
   private lastAgesHostRestartStartedAt?: string;
   private lastAgesHostRestartFinishedAt?: string;
   private initialWarmupFinished = false;
-  private traceSequence = 0;
-  private readonly timingLog: AgesTimingTrace[] = [];
+  private readonly liveTimings = new Map<string, AgesTimingTrace>();
+  private readonly timingStore: TimingStore<AgesTimingTrace>;
   private readonly slotWaiters: Record<AgesPoolSlotKind, AgesSlotWaiter[]> = {
     bigb: [],
     mini: []
@@ -206,8 +204,13 @@ export class AgesConnectionPool {
     private readonly baseUrl: string = AGES_BASE_URL,
     endpoints: AgesPoolEndpoint[] = initialEndpoints,
     backendConfiguration: AgesBackendConfiguration = resolveBackendConfiguration(process.env, baseUrl),
-    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void> } = {}
+    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void>; timingStorePath?: string } = {}
   ) {
+    const timingStorePath = options.timingStorePath ?? process.env.BROKER_TIMINGS_DB_PATH;
+    if (!timingStorePath && process.env.NODE_ENV === "production") {
+      throw new Error("BROKER_TIMINGS_DB_PATH is required in production");
+    }
+    this.timingStore = new TimingStore<AgesTimingTrace>(timingStorePath);
     this.backendConfiguration = backendConfiguration;
     backendConfiguration.backends.forEach((backend) => this.backendStates.set(backend.id, { state: "active" }));
     this.drainTimeoutMs = options.drainTimeoutMs ?? getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
@@ -252,7 +255,6 @@ export class AgesConnectionPool {
         `n=${this.slots.length}`,
         `mini=${this.slots.filter((slot) => slot.kind === "mini").length}`,
         `BigBoy=${this.slots.filter((slot) => slot.kind === "bigb").length}`,
-        `base=${this.baseUrl}`,
         `host=${getHostFromUrl(this.baseUrl) || "unknown"}`,
         `proto=${getProtocolFromUrl(this.baseUrl) || "unknown"}`,
         `ssh=${AGES_SSH_HOST || "unset"}`
@@ -272,7 +274,7 @@ export class AgesConnectionPool {
           [
             `warmup slot fail`,
             this.formatSlot(slot),
-            `err=${slot.lastError ?? "unknown"}`
+            `err=${slot.lastError ? "upstream-error" : "unknown"}`
           ].join(" | ")
         );
         continue;
@@ -344,19 +346,28 @@ export class AgesConnectionPool {
     };
   }
 
-  getTimingLog(): AgesTimingTrace[] {
-    return [...this.timingLog].reverse();
+  getTimingLog(cursor?: number): { rows: AgesTimingTrace[]; liveRows?: AgesTimingTrace[]; nextCursor?: number } {
+    const page = this.timingStore.page(cursor);
+    if (cursor !== undefined || this.liveTimings.size === 0) return page;
+
+    const liveRows = [...this.liveTimings.values()]
+      .sort((left, right) => right.brokerInAt.localeCompare(left.brokerInAt) || right.id.localeCompare(left.id))
+      .slice(0, TimingStore.PAGE_SIZE)
+      .map(trace => ({ ...trace }));
+    return { ...page, liveRows };
   }
 
   clearTimingLog(): { status: string; cleared: number } {
-    const cleared = this.timingLog.length;
-    this.timingLog.length = 0;
+    const cleared = this.timingStore.clear();
+    this.liveTimings.clear();
 
     return {
       status: "ok",
       cleared
     };
   }
+
+  closeTimingStore(): void { this.timingStore.close(); }
 
   async request(slotId: number, endpoint: string, init: RequestInit = {}): Promise<Response> {
     const slot = this.getSlot(slotId);
@@ -434,7 +445,6 @@ export class AgesConnectionPool {
     init: RequestInit = {},
     sourceIp: string = "",
     sourceIpSource: string = "",
-    timingRequest?: AgesTimingRequest
   ): Promise<AgesProxyResult> {
     const brokerInMs = Date.now();
     if (!this.hasReadySlot(kind)) {
@@ -448,13 +458,20 @@ export class AgesConnectionPool {
 
     while (true) {
       const attemptBrokerInMs = Date.now();
-      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs, timingRequest);
+      const trace = this.createTimingTrace(kind, init.method ?? "GET", endpoint, sourceIp, sourceIpSource, attemptBrokerInMs);
       trace.slotWaitStartAt = new Date().toISOString();
-      const slot = await this.acquireSlot(kind, {
-        allowGrow: !this.warmupPromise && !isInternalBeat,
-        baseOnly: isInternalBeat,
-        excludeSlotIds: excludedSlotIds
-      });
+      let slot: AgesPoolSlot;
+      try {
+        slot = await this.acquireSlot(kind, {
+          allowGrow: !this.warmupPromise && !isInternalBeat,
+          baseOnly: isInternalBeat,
+          excludeSlotIds: excludedSlotIds
+        });
+      } catch (error) {
+        trace.error = "slot_acquisition_failed";
+        this.completeTimingTrace(trace);
+        throw error;
+      }
       const slotAcquiredMs = Date.now();
       const agesUrl = this.appendQueryString(this.resolveSlotEndpoint(slot, endpoint), queryString);
       trace.url = this.formatUrl(agesUrl);
@@ -486,7 +503,7 @@ export class AgesConnectionPool {
           agesEndMs = Date.now();
           trace.agesEndAt = new Date(agesEndMs).toISOString();
           trace.agesMs = agesStartMs ? agesEndMs - agesStartMs : undefined;
-          trace.error = formatError(error);
+          trace.error = "upstream_request_failed";
           slot.lastError = formatError(error);
           this.logProxyError(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, {
             error,
@@ -502,9 +519,6 @@ export class AgesConnectionPool {
         const body = Buffer.from(await response.arrayBuffer());
         trace.status = response.status;
         trace.bytes = body.length;
-        if (isJsonResponse(body)) {
-          trace.responseJson = truncateUtf8(body, 1024);
-        }
 
         if (!isInternalBeat) {
           this.recordSlotUse(slot, agesUrl, body);
@@ -522,7 +536,7 @@ export class AgesConnectionPool {
 
         if (response.status === 503) {
           if (this.backendConfiguration.mode === "dual") {
-            void this.drainAndRecycleBackend(slot.backendId).catch((error) => warn(`backend recycle fail | ${formatError(error)}`));
+            void this.drainAndRecycleBackend(slot.backendId).catch((error) => warn(`backend recycle fail | err=${safeErrorName(error)}`));
           } else {
             await this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
           }
@@ -536,7 +550,7 @@ export class AgesConnectionPool {
           slot.agesToken = "";
           slot.lastError = avfpInvalidObjectReason;
           slot.status = "error";
-          trace.error = avfpInvalidObjectReason;
+          trace.error = "upstream_invalid_object";
           this.logProxyError(slot, init.method ?? "GET", agesUrl, sourceIp, sourceIpSource, {
             status: response.status,
             responseHeaders: this.responseHeadersToObject(response.headers),
@@ -588,7 +602,7 @@ export class AgesConnectionPool {
   }
 
   completeTraceResponse(traceId: string, status: number, bytes: number): AgesTimingTrace | undefined {
-    const trace = this.timingLog.find((item) => item.id === traceId);
+    const trace = this.timingStore.get(traceId);
 
     if (!trace) {
       return undefined;
@@ -598,6 +612,7 @@ export class AgesConnectionPool {
     trace.bytes = bytes;
     trace.brokerOutAt = new Date().toISOString();
     trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
+    this.timingStore.upsert(trace);
 
     return trace;
   }
@@ -745,7 +760,7 @@ export class AgesConnectionPool {
         `recycle start`,
         this.formatSlot(slot),
         `u=${this.formatUrl(pingUrl)}`,
-        `err=${slot.lastError ?? "unknown"}`
+        `err=${slot.lastError ? "upstream-error" : "unknown"}`
       ].join(" | ")
     );
 
@@ -771,7 +786,7 @@ export class AgesConnectionPool {
         `recycle fail`,
         this.formatSlot(slot),
         `st=${recycledStatus}`,
-        `err=${slot.lastError ?? "unknown"}`
+        `err=${slot.lastError ? "upstream-error" : "unknown"}`
       ].join(" | ")
     );
 
@@ -795,7 +810,7 @@ export class AgesConnectionPool {
         return;
       }
       void this.drainAndRecycleBackend(id).catch((error) => {
-        warn(`automatic backend recycle fail | backend=${id} | err=${formatError(error)}`);
+        warn(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
       }).finally(() => {
         this.scheduledBackendRecycles.delete(id);
       });
@@ -830,10 +845,7 @@ export class AgesConnectionPool {
         this.formatSlot(slot),
         `u=${this.formatUrl(slot.url)}`,
         `a=${attempt}`,
-        `st=${slot.lastStatusCode ?? "unknown"}`,
-        `${AGES_TOKEN_HEADER}=${slot.agesToken}`,
-        `${ASP_NET_SESSION_COOKIE}=${slot.aspNetSessionId}`,
-        `response=${slot.warmupResponse}`
+        `st=${slot.lastStatusCode ?? "unknown"}`
       ].join(" | ")
     );
   }
@@ -885,8 +897,7 @@ export class AgesConnectionPool {
         `rb=${detail.requestBodySize ?? 0}`,
         `reqh=${this.formatHeaderNames(detail.requestHeaders)}`,
         detail.responseHeaders ? `resh=${this.formatHeaderNames(detail.responseHeaders)}` : "",
-        detail.responsePreview ? `resp=${detail.responsePreview}` : "",
-        detail.error ? `err=${formatError(detail.error)}` : ""
+        detail.error ? `err=${safeErrorName(detail.error)}` : ""
       ]
         : [
           `proxy err`,
@@ -894,7 +905,7 @@ export class AgesConnectionPool {
           `m=${method}`,
           `u=${this.formatUrl(url)}`,
           `st=${detail.status ?? "fetch-fail"}`,
-          detail.error ? `err=${shortError(detail.error)}` : ""
+          detail.error ? `err=${safeErrorName(detail.error)}` : ""
         ])
         .filter(Boolean)
         .join(" | ")
@@ -909,7 +920,7 @@ export class AgesConnectionPool {
         `u=${this.formatUrl(slot.url)}`,
         `a=${nextAttempt}`,
         `to=${WARMUP_TIMEOUT_MS}`,
-        `err=${slot.lastError ?? "unknown"}`
+        `err=${slot.lastError ? "upstream-error" : "unknown"}`
       ].join(" | ")
     );
   }
@@ -921,7 +932,7 @@ export class AgesConnectionPool {
         this.formatSlot(slot),
         `u=${this.formatUrl(slot.url)}`,
         `st=${slot.lastStatusCode ?? "unknown"}`,
-        `err=${slot.lastError ?? "unknown"}`
+        `err=${slot.lastError ? "upstream-error" : "unknown"}`
       ].join(" | ")
     );
   }
@@ -1158,7 +1169,7 @@ export class AgesConnectionPool {
     const status = await this.initializeSlot(slot);
 
     if (status !== "ready") {
-      warn(`pool grow fail | ${this.formatSlot(slot)} | st=${status} | err=${slot.lastError ?? "unknown"}`);
+      warn(`pool grow fail | ${this.formatSlot(slot)} | st=${status} | err=${slot.lastError ? "upstream-error" : "unknown"}`);
       this.removeSlot(slot);
       return undefined;
     }
@@ -1299,8 +1310,7 @@ export class AgesConnectionPool {
     url: string,
     sourceIp: string,
     sourceIpSource: string,
-    brokerInMs: number,
-    timingRequest?: AgesTimingRequest
+    brokerInMs: number
   ): AgesTimingTrace {
     const trace: AgesTimingTrace = {
       id: this.createTraceId(),
@@ -1308,13 +1318,9 @@ export class AgesConnectionPool {
       kind,
       method,
       url: this.formatUrl(url),
-      sourceIp,
-      sourceIpSource,
-      brokerInAt: new Date(brokerInMs).toISOString(),
-      ...(timingRequest && {
-        requestHeaders: timingRequest.requestHeaders?.map((header) => ({ ...header })),
-        requestBody: timingRequest.requestBody
-      })
+      sourceIp: isIP(sourceIp) ? sourceIp : "",
+      sourceIpSource: ["xff", "xri", "xci", "xofi", "cf", "tci", "envoy", "forwarded", "req", "socket", "broker"].includes(sourceIpSource) ? sourceIpSource : "unknown",
+      brokerInAt: new Date(brokerInMs).toISOString()
     };
 
     this.pushTimingTrace(trace);
@@ -1323,11 +1329,8 @@ export class AgesConnectionPool {
   }
 
   private pushTimingTrace(trace: AgesTimingTrace): void {
-    this.timingLog.push(trace);
-
-    while (this.timingLog.length > 500) {
-      this.timingLog.shift();
-    }
+    if (trace.entryType === "event") this.timingStore.upsert(trace);
+    else this.liveTimings.set(trace.id, trace);
   }
 
   private pushTimingEvent(message: string, errorDetail?: string): void {
@@ -1335,13 +1338,13 @@ export class AgesConnectionPool {
       id: this.createTraceId(),
       entryType: "event",
       method: "EVENT",
-      url: message,
+      url: safeEventLabel(message),
       sourceIp: "system",
       sourceIpSource: "broker",
       brokerInAt: new Date().toISOString(),
       brokerOutAt: new Date().toISOString(),
       totalMs: 0,
-      error: errorDetail
+      error: errorDetail ? "event_error" : undefined
     });
   }
 
@@ -1360,13 +1363,13 @@ export class AgesConnectionPool {
       `next=${nextTarget}`
     ].join(" | ");
 
-    warn(`${message} | err=${reason}`);
+    warn(`${message} | err=${reason ? "upstream-error" : "unknown"}`);
     this.pushTimingTrace({
       id: this.createTraceId(),
       entryType: "event",
       kind: slot.kind,
       method: "RETRY",
-      url: message,
+      url: safeEventLabel(message),
       sourceIp: "system",
       sourceIpSource: "broker",
       slot: this.formatSlot(slot),
@@ -1374,7 +1377,7 @@ export class AgesConnectionPool {
       brokerInAt: new Date().toISOString(),
       brokerOutAt: new Date().toISOString(),
       totalMs: 0,
-      error: reason
+      error: reason ? "upstream_invalid_object" : undefined
     });
   }
 
@@ -1382,17 +1385,19 @@ export class AgesConnectionPool {
     try {
       await this.recycleSlot(slot, agesUrl);
     } catch (error) {
-      warn(`damaged-slot recycle fail | ${this.formatSlot(slot)} | err=${formatError(error)}`);
+      warn(`damaged-slot recycle fail | ${this.formatSlot(slot)} | err=${safeErrorName(error)}`);
       this.pushTimingEvent(`damaged-slot recycle fail: ${this.formatSlot(slot)}`, formatError(error));
     }
   }
 
   private completeTimingTrace(trace: AgesTimingTrace): void {
+    if (!this.liveTimings.delete(trace.id)) return;
     if (!trace.brokerOutAt) {
       trace.brokerOutAt = new Date().toISOString();
     }
 
     trace.totalMs = Date.parse(trace.brokerOutAt) - Date.parse(trace.brokerInAt);
+    this.timingStore.upsert(trace);
   }
 
   private buildTraceHeaders(trace: AgesTimingTrace): Record<string, string> {
@@ -1409,9 +1414,7 @@ export class AgesConnectionPool {
   }
 
   private createTraceId(): string {
-    this.traceSequence = (this.traceSequence + 1) % 1_000_000;
-
-    return `${Date.now().toString(36)}-${this.traceSequence.toString().padStart(6, "0")}`;
+    return randomUUID();
   }
 
   private getKindSummary(kind: AgesPoolSlotKind): AgesPoolKindSummary {
@@ -1506,9 +1509,9 @@ export class AgesConnectionPool {
   private formatUrl(url: string): string {
     try {
       const parsedUrl = new URL(url);
-      return `${parsedUrl.pathname}${parsedUrl.search}`;
+      return parsedUrl.pathname;
     } catch {
-      return url.replace(this.baseUrl.replace(/\/+$/, ""), "");
+      return url.split("?", 1)[0].replace(this.baseUrl.replace(/\/+$/, ""), "");
     }
   }
 
@@ -1660,7 +1663,7 @@ export class AgesConnectionPool {
     try {
       validateSshPrivateKey(AGES_SSH_KEY_PATH);
     } catch (error) {
-      warn(`ages restart skip | reason=${reason} | err=${formatError(error)}`);
+      warn(`ages restart skip | reason=${reason} | err=${safeErrorName(error)}`);
       return false;
     }
 
@@ -1687,7 +1690,7 @@ export class AgesConnectionPool {
       void this.warmUp(`host restart ${reason}`);
       return true;
     } catch (error) {
-      warn(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${formatError(error)}`);
+      warn(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${safeErrorName(error)}`);
       this.pushTimingEvent(`IIS restart fail: ${reason}`, formatError(error));
       return false;
     } finally {
@@ -1782,25 +1785,11 @@ function getBodySize(body: BodyInit | null | undefined): number {
   return 0;
 }
 
-function isJsonResponse(body: Buffer): boolean {
-  try {
-    JSON.parse(body.toString("utf8"));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function truncateUtf8(body: Buffer, maxBytes: number): string {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  for (let length = Math.min(body.length, maxBytes); length >= 0; length--) {
-    try {
-      return decoder.decode(body.subarray(0, length));
-    } catch {
-      // A byte limit can end inside a multibyte character.
-    }
-  }
-  return "";
+function safeEventLabel(message: string): string {
+  if (message.startsWith("damaged-slot retry")) return "damaged-slot retry";
+  if (message.startsWith("damaged-slot recycle fail")) return "damaged-slot recycle fail";
+  const restart = /^IIS restart (cooldown|start|ok|fail):/.exec(message);
+  return restart ? `IIS restart ${restart[1]}` : "system event";
 }
 
 function createInitialEndpoints(): AgesPoolEndpoint[] {
@@ -1902,8 +1891,9 @@ function isConfigEnabled(name: string, fallback = false): boolean {
   return ["1", "true", "yes", "on", "enabled"].includes(rawValue.trim().toLowerCase());
 }
 
-function shortError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function safeErrorName(error: unknown): string {
+  if (!(error instanceof Error)) return "Error";
+  return ["AbortError", "TimeoutError", "TypeError", "Error"].includes(error.name) ? error.name : "Error";
 }
 
 function validateSshPrivateKey(path: string): void {

@@ -6,7 +6,10 @@ import path from "path";
 import { DoormanController, getFullCors, getServingConfig, registerService } from "se_configbase";
 
 import { BrokerAuthService } from "./auth/auth_service";
-import { createAuthHttp } from "./auth/http";
+import { verifyMs07BeatCentrally } from "./auth/central_beat";
+import { createAuthHttp, requireSecureTransport } from "./auth/http";
+import { loadServiceKey } from "./auth/service_key";
+import { trustedProxyAddresses } from "./auth/trusted_proxy";
 import { BrokerRouter } from "./routes/rou_broker";
 import { agesConnectionPool } from "./services/ages_pool";
 import { configureHeartbeatExtraData } from "./services/heartbeat_metadata";
@@ -21,7 +24,7 @@ const certificateRoot = process.env.CERT_PATH_CONTAINER ?? "/app/certificados";
 const configuredRequestBodyLimit = process.env.REQUEST_BODY_LIMIT?.trim();
 const requestBodyLimit = configuredRequestBodyLimit && /^[1-9]\d*(?:b|kb|mb|gb)$/i.test(configuredRequestBodyLimit) ? configuredRequestBodyLimit : "100mb";
 
-app.set("trust proxy", true);
+app.set("trust proxy", trustedProxyAddresses(process.env.BROKER_TRUSTED_PROXY_IPS));
 app.use(
   "/.well-known/acme-challenge",
   express.static(`${certbotWebroot}/.well-known/acme-challenge`, {
@@ -29,12 +32,16 @@ app.use(
     fallthrough: false
   })
 );
+app.use(requireSecureTransport);
+const sslConfig = getSslConfig();
+const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
 const auth = new BrokerAuthService({
-  publicOrigin: requiredEnvironment("BROKER_PUBLIC_ORIGIN"),
-  credentialFile: requiredEnvironment("BROKER_AUTH_HTPASSWD_PATH"),
-  databaseFile: requiredEnvironment("BROKER_AUTH_DB_PATH")
+  publicOrigin: process.env.BROKER_PUBLIC_ORIGIN?.trim() || undefined,
+  certificatePem: sslConfig.ready ? readFileSync(sslConfig.certPath) : undefined,
+  databaseFile: authDatabaseFile
 });
-const authHttp = createAuthHttp(auth, requiredEnvironment("BROKER_SERVICE_API_KEY"));
+const serviceKey = loadServiceKey(process.env.BROKER_SERVICE_API_KEY, authDatabaseFile);
+const authHttp = createAuthHttp(auth, serviceKey, undefined, verifyMs07BeatCentrally);
 app.use("/auth", authHttp.routes);
 app.use(authHttp.gate);
 app.use(["/foreign/broker/ages", "/ages"], raw({ type: () => true, limit: requestBodyLimit }));
@@ -73,8 +80,6 @@ httpServer.listen(config.port, () => {
     agesConnectionPool.startPingMonitor();
   });
 });
-
-const sslConfig = getSslConfig();
 
 if (sslConfig.ready) {
   const httpsServer = https.createServer(
