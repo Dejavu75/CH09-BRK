@@ -13,12 +13,6 @@ services:
       -  ${SSH_KEY_HOST_PATH}:/run/secrets/ch09-brk-iis:ro
       -  ${CERTBOT_WEBROOT_PATH}:/app/certbot-www
       - type: bind
-        source: ${BROKER_AUTH_HTPASSWD_HOST_PATH:?Set the BackGES credential file path on guest-local storage}
-        target: /run/secrets/backges-htpasswd
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
         source: ${BROKER_STATE_HOST_PATH:?Set the Broker state directory on guest-local storage}
         target: /app/state
         bind:
@@ -31,10 +25,9 @@ services:
       SSH_PUBLIC_KEY_PATH: /run/secrets/ch09-brk-iis/ch09_brk_iis.pub
       CERTBOT_WEBROOT: /app/certbot-www
       BROKER_PUBLIC_ORIGIN: ${BROKER_PUBLIC_ORIGIN:?Set the exact HTTPS Broker origin}
-      BROKER_AUTH_HTPASSWD_PATH: /run/secrets/backges-htpasswd
       BROKER_AUTH_DB_PATH: /app/state/sessions.sqlite
       BROKER_TIMINGS_DB_PATH: /app/state/timings.sqlite
-      BROKER_SERVICE_API_KEY: ${BROKER_SERVICE_API_KEY:?Set a random service key with at least 32 bytes}
+      BROKER_SERVICE_API_KEY: ${BROKER_SERVICE_API_KEY:-}
       BROKER_TRUSTED_PROXY_IPS: ${BROKER_TRUSTED_PROXY_IPS:-}
       CERT_PATH_CONTAINER: /app/certificados
     networks:

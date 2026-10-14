@@ -110,7 +110,7 @@ test("timing output omits request and response content and query parameters", as
     await pool.warmUp();
     responseBody = JSON.stringify({ message: "synthetic-secret-response" });
     const jsonResult = await pool.proxyCall("bigb", "ologin.autorizar", "token=synthetic-secret-query", { method: "POST", body: "synthetic-secret-request" });
-    const jsonTrace = pool.getTimingLog().find(trace => trace.id === jsonResult.traceId);
+    const jsonTrace = pool.getTimingLog().rows.find(trace => trace.id === jsonResult.traceId);
     assert.deepEqual(jsonResult.body, Buffer.from(responseBody));
     assert.equal(jsonTrace.requestHeaders, undefined);
     assert.equal(jsonTrace.requestBody, undefined);
@@ -120,16 +120,49 @@ test("timing output omits request and response content and query parameters", as
     responseBody = '{"result":"json-with-plain-content-type"}';
     responseType = "text/plain";
     const plainJsonResult = await pool.proxyCall("bigb", "plain-json", "", { method: "GET" });
-    const plainJsonTrace = pool.getTimingLog().find(trace => trace.id === plainJsonResult.traceId);
+    const plainJsonTrace = pool.getTimingLog().rows.find(trace => trace.id === plainJsonResult.traceId);
     assert.equal(plainJsonTrace.responseJson, undefined);
 
     responseBody = "plain-text-response";
     responseType = "text/plain";
     const textResult = await pool.proxyCall("bigb", "plain", "", { method: "GET" });
-    const textTrace = pool.getTimingLog().find(trace => trace.id === textResult.traceId);
+    const textTrace = pool.getTimingLog().rows.find(trace => trace.id === textResult.traceId);
     assert.equal(textTrace.responseJson, undefined);
     assert.equal(textResult.body.toString(), responseBody);
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("timing API validates keyset cursors and page HTML does not load history eagerly", async t => {
+  const cursors = [];
+  const pool = {
+    getTimingLog(cursor) {
+      cursors.push(cursor);
+      return cursor === undefined
+        ? { rows: [{ id: "synthetic-trace" }], liveRows: [{ id: "synthetic-live" }], nextCursor: 10 }
+        : { rows: [{ id: "synthetic-older" }] };
+    }
+  };
+  const app = express();
+  app.use("/foreign/broker", loadBrokerRouter(pool));
+  const url = await listen(http.createServer(app), t);
+  const html = await (await fetch(`${url}/foreign/broker/pool/timings/show`)).text();
+  assert.match(html, /Más antiguos/);
+  assert.match(html, /page\.rows/);
+  assert.match(html, /page\.liveRows/);
+  assert.deepEqual(cursors, [], "the HTML response must not scan timing history");
+
+  const first = await (await fetch(`${url}/foreign/broker/pool/timings`)).json();
+  assert.equal(first.rows.length, 1);
+  assert.deepEqual(first.liveRows, [{ id: "synthetic-live" }]);
+  assert.equal(first.nextCursor, 10);
+  const older = await (await fetch(`${url}/foreign/broker/pool/timings?cursor=10`)).json();
+  assert.equal(older.rows.length, 1);
+  assert.equal(older.liveRows, undefined);
+  assert.deepEqual(cursors, [undefined, 10]);
+  for (const cursor of ["0", "-1", "abc", "1.5", "9007199254740992"]) {
+    assert.equal((await fetch(`${url}/foreign/broker/pool/timings?cursor=${cursor}`)).status, 400);
+  }
+  assert.deepEqual(cursors, [undefined, 10]);
 });
