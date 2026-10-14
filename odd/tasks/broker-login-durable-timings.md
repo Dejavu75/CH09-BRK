@@ -301,7 +301,8 @@ requested that this arbitrary retention cap be removed.
   pair without restarting the server. Work-unit commit `7c0cdc7`. Independent
   verification passed TypeScript, focused 19/19, full suite 113 pass with one
   platform-specific skip, Docker build, diff checks, and a fresh real HTTPS
-  rotation probe. Review: disabled/unmanaged.
+  rotation probe. Approved-issue gate is pending on issue #24. Review:
+  disabled/unmanaged.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
   storage, cookie/CSRF/rate-limit behavior, and focused tests. Route: delegated
@@ -573,3 +574,7 @@ requested that this arbitrary retention cap be removed.
   on the same process, listener, and port. Captured messages contained only
   generic status or error-class text. The verifier made no workspace or remote
   changes. Production Certbot renewal remains a separate runtime observation.
+- 2026-10-13 delivery preparation: issue #24 was created from the repository's
+  Change request form and read back successfully. Its required
+  `status:approved` gate remains pending explicit maintainer approval; no pull
+  request or merge has been attempted.
