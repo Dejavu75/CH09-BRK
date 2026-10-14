@@ -301,7 +301,13 @@ requested that this arbitrary retention cap be removed.
   pair without restarting the server. Work-unit commit `7c0cdc7`. Independent
   verification passed TypeScript, focused 19/19, full suite 113 pass with one
   platform-specific skip, Docker build, diff checks, and a fresh real HTTPS
-  rotation probe. Approved-issue gate is pending on issue #24. Review:
+  rotation probe. Issue #24 was approved and closed by merged PR #25. Main
+  merge `45cd96e` passed CI and Docker publication, and Watchtower activated
+  image `sha256:af9b0ff814325cce2b96c556527a9806b1034e1a303ecaac2d066fa16c068fbc`
+  as build `1.0.16`. Live HTTPS login returned 200, a missing Broker beat token
+  returned 401, restart count stayed zero, and the pool converged from a
+  transient 8/1/1 to 10/0/0 with A=5/B=5 without manual intervention. An
+  actual production certificate renewal remains unexercised. Review:
   disabled/unmanaged.
 
 - [x] **T1 — Auth foundation.** Add credential-file verification, session
@@ -578,3 +584,17 @@ requested that this arbitrary retention cap be removed.
   Change request form and read back successfully. Its required
   `status:approved` gate remains pending explicit maintainer approval; no pull
   request or merge has been attempted.
+- 2026-10-14 T15 delivery and activation: the maintainer explicitly approved
+  issue #24, PR #25 was created with exactly `type:bug`, its checks passed, and
+  it merged to main as `45cd96ed4a642a919b76760eb6f38b0c8cf3be8f`.
+  Main CI run `38503399750` and Docker publication run `38503399808` passed.
+  The existing labeled Watchtower activated image
+  `sha256:af9b0ff814325cce2b96c556527a9806b1034e1a303ecaac2d066fa16c068fbc`
+  without being modified; its container ID and start time remained unchanged.
+  CH09 reported build `1.0.16`, revision `45cd96ed4a64`, clean build metadata,
+  running with restart count zero. Public HTTPS `/auth/login` returned 200 and
+  an unauthenticated Broker heartbeat returned 401. Initial AGES warmup reached
+  8/10; a protected pool read later showed 8 ready, 1 warming, and 1 error, then
+  converged without manual mutation to 10 ready, 0 warming, 0 error, with
+  A=5/B=5. An actual Certbot renewal has not been forced or observed, so T10
+  remains partial for that evidence and for live attributable CA04/CA05 traffic.
