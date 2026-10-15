@@ -4,8 +4,8 @@ const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const scriptPath = require("node:path").resolve(__dirname, "../scripts/provision-ages-dual-iis.ps1");
-const source = readFileSync(scriptPath, "utf8");
-const readme = readFileSync(require("node:path").resolve(__dirname, "../README.md"), "utf8");
+const source = readFileSync(scriptPath, "utf8").replace(/\r\n/g, "\n");
+const readme = readFileSync(require("node:path").resolve(__dirname, "../README.md"), "utf8").replace(/\r\n/g, "\n");
 const shell = process.platform === "win32" ? "powershell.exe" : "pwsh";
 
 test("IIS provisioning script parses without executing IIS mutations", (t) => {

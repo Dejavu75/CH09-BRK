@@ -130,6 +130,18 @@ no deben invocarse para esta migración.
 - Config local: `default.env`
 - Rutas principales: `src/routes/rou_broker.ts`
 
+## Alias de centros de costos
+
+Las rutas REST `tablas/centros_costos/centros` y
+`tablas/centros_costos/subcentros`, bajo `/ages` o `/foreign/broker`,
+apuntan a `otablas.oCentros.centros` y `otablas.oCentros.subcentros`.
+El alias funciona con BigBoy y con el selector `~mini~`. No cambia la ruta
+existente `tablas/centros/centros`, los prefijos de otros objetos ni los métodos
+con guiones bajos. `oCentrosCostos` no es el objeto registrado en AVFP.
+
+Esta correspondencia se verificó contra las fuentes AVFP locales el 2026-10-15;
+no acredita la versión de una DLL desplegada ni reemplaza una prueba runtime.
+
 ## Verificación operativa
 
 Revisar primero:

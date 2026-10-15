@@ -248,6 +248,8 @@ function getWildcardPath(req: Request): string {
 }
 
 function normalizeAgesModuleSegment(segment: string): string {
+  const unprefixed = segment.replace(/^o/i, "");
+  if (unprefixed.toLowerCase() === "centros_costos") return "oCentros";
   return segment.toLowerCase().startsWith("o") ? segment : `o${segment}`;
 }
 

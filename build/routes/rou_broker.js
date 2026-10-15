@@ -224,6 +224,9 @@ function getWildcardPath(req) {
     return Array.isArray(value) ? value.join("/") : String(value !== null && value !== void 0 ? value : "");
 }
 function normalizeAgesModuleSegment(segment) {
+    const unprefixed = segment.replace(/^o/i, "");
+    if (unprefixed.toLowerCase() === "centros_costos")
+        return "oCentros";
     return segment.toLowerCase().startsWith("o") ? segment : `o${segment}`;
 }
 function getQueryString(req) {

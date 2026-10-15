@@ -1,0 +1,22 @@
+# Integración selectiva local de centros, CRLF y Aries
+Base: `main` en `743456f`; rama: `codex/broker-centros-selective`; entrega: `ask-on-risk`, sólo main local.
+Pruebas: Node test runner y TypeScript locales; sin servicios reales. Previsión: menos de 400 líneas escritas.
+
+## Specs
+- S1: "Integrá selectivamente en main local el alias de centros de costos, CRLF y la documentación de Aries." Rescatar únicamente esas unidades; mantener el comportamiento genérico previo y el documento actual de main.
+- S2: "Validá el contrato AVFP y las pruebas." Contrastar el alias con fuentes AVFP locales y probar el router público con pool simulado. No implica aceptación runtime ni regeneración documental externa.
+- S3: "Sin publicar ni tocar broker o rollback; conservá worktrees y cambios sin commit." Sin red, Docker, IIS ni operaciones sobre servicios. Trabajar en checkout aislado y comparar el manifiesto de los worktrees previos.
+
+## Tasks
+- T1 — S1-S3 — inline — verificado, commit pendiente — alias `centros_costos → oCentros`, fuente/compilado concordantes; RED 2 fallos nuevos + 2 compatibilidades correctas, GREEN 4/4; motivo: cambio entendido, sin razón para delegar escritura.
+- T2 — S1-S3 — inline — verificado, commit pendiente — normalización CRLF, 6/6 pruebas provisioning y 8 comprobaciones estructurales LF/CRLF; apéndice histórico Aries, sin reemplazar requisitos actuales.
+- T3 — S1-S3 — inline + verificación independiente — pendiente — pruebas, contrato, preservación y fast-forward local; riesgo 3 por mapper compartido.
+
+## Log
+- L1 — Pedido original: "Integrá selectivamente en main local el alias de centros de costos, CRLF y la documentación de Aries. Validá el contrato AVFP y las pruebas. Sin publicar ni tocar broker o rollback; conservá worktrees y cambios sin commit."
+- L2 — 2026-10-15: Exploración delegada de sólo lectura. AVFP local registra `otablas.oCentros`, clase `mavfp_centros_costos`, métodos `centros(tcContenido,cVerbo)` y `subcentros(tcContenido,cVerbo)`, permisos 200/218. El alias antiguo `oCentrosCostos` no existe; no se rescata literalmente. Evidencia: `avfp_objects.PRG:40,1307`, `avfp_objects_mini.PRG:1586,1706,2794-2805`, workspace 2000. No se verificó DLL desplegada. OpenAPI Full local no contiene rutas centros.
+- L3 — 2026-10-15: Checkout aislado creado desde main; RDD sigue off por clone_local. Manifiesto externo: 12 entradas previas, 809 hashes de archivos, estado e índices. Dependencias existentes enlazadas únicamente en el checkout nuevo; sin instalar ni ejecutar hooks de build/publicación.
+- L4 — 2026-10-15: Pruebas de mapeo por HTTP efímero local con pool simulado, sin exportar helper privado. Verificación independiente requerida por riesgo 3. CRLF afecta sólo lectura de fixtures; Aries se incorpora exclusivamente como registro histórico fechado.
+- L5 — 2026-10-15: Suite completa local con guard externo: 139 pruebas, 138 correctas, 0 fallos, 1 omitida porque requiere UID/POSIX en Windows. Sólo se admitieron conexiones a servidores efímeros creados por las pruebas; logging/mail operativo desactivado. No Docker, servicios reales ni credenciales. TypeScript `--noEmit` correcto después de generar metadata local ignorada; la primera compilación carecía de ese archivo generado. Se excluyeron de la entrega todos los cambios de metadata/build no pertinentes.
+- L6 — 2026-10-15: CRLF es normalización defensiva de fixtures, sin fallo funcional reproducible en la base actual: sus cuatro aserciones estructurales ya admiten ambos finales de línea. Se validó cada variante explícitamente, sin inventar RED. Aries se tradujo al castellano respetando los hechos históricos de las líneas 183–227 del documento original, con nota explícita de no revalidación.
+- L7 — 2026-10-15: Contrato estático focalizado correcto (registro, herencia, firmas y permisos 200/218). Validación general AVFP falló por 226 advertencias externas al broker; contratos ordinarios presentan 3 advertencias (bindings compras solicitudes/órdenes y revisión de parser pickings); self-test del exportador falla en CA04 Phase 4. No se corrigieron fuentes/sidecars ajenos ni se generaron/publicaron documentos. Logs, hashes de fuentes y manifiestos: `C:/Sistema/ecosystem/.tmp/broker-centros-selective-audit/`. Preservación de los 12 worktrees anteriores sin diferencias.

@@ -628,3 +628,44 @@ requested that this arbitrary retention cap be removed.
   confirmed the expected tag, image ID, and registry digest. CH09 retained
   container ID `f1d2ae662496` with zero restarts, and Watchtower retained ID
   `817c238b1a86` with zero restarts; neither was recreated or restarted.
+
+## Registro histórico: ingreso de autenticación Aries FD03 — 2026-10-14
+
+Este apéndice recupera la evidencia registrada el 2026-10-14. La integración
+documental del 2026-10-15 no volvió a ejecutar estas operaciones ni verificó
+el estado actual de Aries. No es una instrucción de despliegue.
+
+- Causa del primer fallo: FD03 enviaba `/foreign` a CH09, pero carecía de una
+  ubicación `/auth/`; su ruta general devolvía Nginx HTTP 404 para el login.
+  El mismo login directo por HTTPS en CH09 respondía HTTP 200.
+- La imagen local `dhzacur/fd03-cag:aries-auth-eba08500` se derivó de la imagen
+  activa y agregó `location ^~ /auth/` mediante el snippet del proxy Broker.
+  El override `/srv/solinges/ecosystem/dockerzone/FD03-CAG/codex-aries-login-override.yaml`
+  la seleccionó con `pull_policy: never`. Se validó Compose y se recreó
+  únicamente `gateway`, con `--no-deps`.
+- Aceptación registrada: `nginx -t` correcto; login público HTTPS 200 con TLS
+  válido; HTML protegido sin sesión redirigía 303 al login y terminaba en 200;
+  API sin sesión conservaba 401; `/healthz` respondía 200; `/AGES` y `/center`
+  seguían enrutados, sin el antiguo 404 de Nginx.
+- La verificación independiente no usó credenciales. CH09, CA05, Watchtower
+  y Certbot conservaron tiempos de inicio anteriores a la recreación de FD03.
+  No se realizó rollback.
+
+### Registro histórico: corrección de origen del login Aries — 2026-10-14
+
+- Después del primer arreglo, el formulario público válido devolvía 403 antes
+  de verificar credenciales. FD03 enviaba host y puerto internos en `Host`;
+  CH09 calculaba su origen esperado con ese valor, mientras el navegador
+  enviaba el origen público sin el puerto interno.
+- La imagen local posterior `dhzacur/fd03-cag:aries-auth-origin-eba08500`
+  preservó el host público con `proxy_set_header Host $host;` y mantuvo
+  `/auth/`. Sólo se recreó FD03 `gateway`, con `--no-deps`, sin rollback.
+- Aceptación registrada con la cuenta suministrada: login 303, sesión
+  autenticada 200, pool protegido 200 y logout 200. No se imprimieron ni
+  persistieron credenciales, cookies o valores CSRF durante la comprobación.
+- La verificación independiente, sin usar esa cuenta, obtuvo 401 con un login
+  inválido y Origin público correcto, en vez del 403 anterior: la petición
+  alcanzó la verificación de credenciales. Nginx validó; login GET respondió
+  200 con TLS válido; el HTML protegido redirigió 303 al login.
+- CH09, CA05, Watchtower y Certbot conservaron identidades y tiempos de inicio
+  anteriores a esa recreación de FD03.
