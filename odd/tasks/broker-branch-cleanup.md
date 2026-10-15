@@ -12,7 +12,7 @@ Rama: `codex/broker-branch-cleanup`; entrega: `ask-on-risk`, solamente local; co
 
 ## Tasks
 
-- T1 — S1–S5 — ruta: inline, operación administrativa comprendida; estado: pendiente; riesgo: item 1, eliminación de referencias; verificación independiente posterior; commit: pendiente.
+- T1 — S1–S5 — ruta: inline, operación administrativa comprendida; estado: completada, comprobaciones propias y verificación independiente aprobadas para S1–S5; riesgo: item 1, eliminación de referencias; commit de recuperación: `6adb26000c544d6ef6fae21115ae6097b41cff40`; RDD: desactivado, entrega no administrada.
 
 ## Log
 
@@ -21,3 +21,9 @@ Rama: `codex/broker-branch-cleanup`; entrega: `ask-on-risk`, solamente local; co
 - L3 — El conector GitHub de Codex no ofrece eliminación de referencias; el usuario autorizó explícitamente GitHub CLI. La sesión activa corresponde a `Dejavu75`. El workflow de publicación responde a cambios de `main` remoto, por lo que no se realizará ningún push.
 - L4 — RDD desactivado por preferencia del clon (`clone_local`); no se activará. No corresponde RED/GREEN funcional para eliminación administrativa y recuperación documental: se verificarán respaldo, referencias exactas, contenido e invariantes de preservación antes y después.
 - L5 — Antes de eliminar se guardarán el bundle de todas las referencias, inventario remoto/local y manifiestos de archivos e índices fuera del repositorio. Los HEAD de worktrees se desvincularán en el mismo commit, sin cambiar sus archivos. La verificación independiente será de solo lectura.
+- L6 — Respaldo creado y bundle verificado en `C:\Users\diego\.codex\backups\ch09-branches-20261015`. Inventario previo: 30 ramas locales, 20 remotas, 11 worktrees y 701 archivos verificados por hash; incluye índices, parches y archivos modificados. Las pruebas aisladas de desvinculación conservaron staged, unstaged, untracked y registros de worktrees ausentes.
+- L7 — Recuperación local `6adb260`: documento de main remoto conservado byte por byte y apéndice original de 30 líneas agregado al final, más este registro. Se empleó un índice temporal; ningún índice de los worktrees fue reutilizado. No se realizó push.
+- L8 — Se eliminaron las 19 ramas remotas auditadas mediante GitHub CLI, verificando su SHA inmediatamente antes de cada DELETE. Luego se desvincularon los nueve HEAD asociados y se eliminaron 28 ramas locales anteriores y la rama temporal de recuperación. Se retiraron únicamente sus 19 referencias de seguimiento remoto, conservando `origin/main` y `origin/HEAD`.
+- L9 — Comprobaciones propias aprobadas: permanecen solamente `main` y `codex/broker-client-token-only` localmente; solamente `main` en GitHub. Los once worktrees conservan su commit, existencia, índice, estado y archivos originales; cero diferencias de preservación. `main` remoto sigue en `cb98a0e`. `git diff --check cb98a0e main` aprobado. Falta la verificación independiente.
+- L10 — Verificación independiente de solo lectura aprobada para S1–S5: lista remota actual, ambas ramas locales, conservación de todos los tips originales en el bundle, apéndice exacto y documento base intacto, once índices, nueve estados de worktrees existentes y 701 entradas del manifiesto (700 archivos y una ausencia previa). ZIP, parches e índices de respaldo íntegros. Sin bloqueantes; el archivo ya ausente `Tests/secure_transport.test.js` continúa ausente y no constituye una pérdida.
+- L11 — Cierre exclusivamente documental local. No se ejecutaron builds, pruebas de aplicación, publicaciones, reinicios, cambios remotos de main ni limpieza de archivos. Los worktrees permanecen en HEAD separado para no alterar su contenido. El respaldo permite restaurar los nombres y tips originales si se requiere.
