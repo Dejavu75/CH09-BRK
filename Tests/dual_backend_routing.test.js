@@ -51,26 +51,35 @@ test("balances the default ten slots five per backend", () => {
   assert.deepEqual(pool.getSummary().backends.map((backend) => backend.slots), [5, 5]);
 });
 
-test("keeps tokens and cookies pinned to each slot backend", async () => withFetch(
-  async (url, init = {}) => {
-    if (!String(url).includes("dummy_val")) {
-      const host = new URL(url).hostname;
-      const headers = new Headers(init.headers);
-      assert.equal(headers.get("AGES_TOKEN"), `token-${host}`);
-      assert.match(headers.get("cookie"), new RegExp(`session-${host}`));
+test("keeps internal tokens and cookies pinned to each slot backend", async () => {
+  const externalTokens = [];
+  return withFetch(
+    async (url, init = {}) => {
+      if (!String(url).includes("dummy_val")) {
+        const host = new URL(url).hostname;
+        const headers = new Headers(init.headers);
+        if (String(url).includes("external.ages")) {
+          externalTokens.push(headers.get("AGES_TOKEN"));
+        } else {
+          assert.equal(headers.get("AGES_TOKEN"), `token-${host}`);
+        }
+        assert.match(headers.get("cookie"), new RegExp(`session-${host}`));
+      }
+      return ready(url);
+    },
+    async () => {
+      const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "mini" }], dual);
+      await pool.warmUp();
+      const first = await pool.proxyCall("mini", "external");
+      const second = await pool.proxyCall("mini", "external", "", { headers: { AGES_TOKEN: "client-token" } });
+      assert.deepEqual([first.backendId, second.backendId], ["A", "B"]);
+      assert.match(first.agesUrl, /ages-a/);
+      assert.match(second.agesUrl, /ages-b/);
+      assert.deepEqual(externalTokens, [null, "client-token"]);
+      await pool.request(first.slotId, "/~mini~/internal.ages");
     }
-    return ready(url);
-  },
-  async () => {
-    const pool = new AgesConnectionPool("http://legacy", [{ kind: "mini" }, { kind: "mini" }], dual);
-    await pool.warmUp();
-    const first = await pool.proxyCall("mini", "first");
-    const second = await pool.proxyCall("mini", "second");
-    assert.deepEqual([first.backendId, second.backendId], ["A", "B"]);
-    assert.match(first.agesUrl, /ages-a/);
-    assert.match(second.agesUrl, /ages-b/);
-  }
-));
+  );
+});
 
 for (const kind of ["bigb", "mini"]) {
   test(`${kind} login forwards credentials without a slot token`, async () => {
@@ -98,7 +107,11 @@ for (const kind of ["bigb", "mini"]) {
       assert.equal(login.headers.get("Accept"), "application/json");
 
       await pool.proxyCall(kind, "other", "", { method: "GET" });
-      assert.equal(requests.at(-1).headers.get("AGES_TOKEN"), "token-legacy");
+      assert.equal(requests.at(-1).headers.get("AGES_TOKEN"), null);
+
+      await pool.proxyCall(kind, "other", "", { method: "GET", headers: { ages_token: "client-token" } });
+      assert.equal(requests.at(-1).headers.get("AGES_TOKEN"), "client-token");
+      assert.match(requests.at(-1).headers.get("cookie"), /session-legacy/);
     });
   });
 }

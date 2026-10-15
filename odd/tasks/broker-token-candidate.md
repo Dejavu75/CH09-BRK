@@ -1,0 +1,29 @@
+# Candidato local de token del cliente
+Objetivo: preparar un candidato aislado desde main con c60bf69 y cobertura local, sin publicar ni tocar servicios existentes.
+Rama: `codex/broker-client-token-candidate`; base: `e151832d945b5ccd03f2d4eec61c99b0c8e3cfa3`; entrega: `ask-on-risk`, sólo local; runner: Node test runner y TypeScript. Previsión: menos de 400 líneas autorales, excluyendo compilados.
+
+## Specs
+
+- S1: "Prepará un candidato aislado desde main con el cambio de c60bf69". Mantener intactos main y la rama original; aplicar únicamente esa unidad sobre la base actual, preservando las mejoras posteriores de main.
+- S2: "agregá las pruebas faltantes que puedan ejecutarse localmente.". Cubrir forwarding externo, login, variantes de headers, rutas con pool real y upstream simulado, mantenimiento interno, beat Mini y reutilización de slots. Caracterizar cookies y estado de respuesta existentes sin ampliar la implementación a otra política de autorización. La aceptación con DLL AGES real queda pendiente.
+- S3: "Sin publicar, tocar servicios". No push, PR, registro, Docker, Compose, SSH ni tráfico a servicios existentes. Los servidores efímeros de las pruebas sólo escucharán en loopback; todo acceso externo de los runners se bloqueará.
+- S4: "ni alterar los cambios sin commit.". Conservar archivos, índices, commits y referencias originales. El candidato usa un worktree nuevo dentro de las raíces escribibles autorizadas; no se modifica ni elimina ningún worktree previo.
+
+## Tasks
+
+- T1 — S1–S4 — ruta: inline, cambio y harness comprendidos; estado: candidato preparado, verificación independiente pendiente y suite completa limitada por entorno; RED: 25 fallos observados antes de aplicar la unidad, cinco premisas de harness corregidas; GREEN focal: 54/54; riesgo: items 2 y 3, autorización y compatibilidad compartida; commit: pendiente. Verificación independiente al final por riesgo alto.
+
+## Log
+
+- L1 — 2026-10-15 — Pedido original: "Prepará un candidato aislado desde main con el cambio de c60bf69 y agregá las pruebas faltantes que puedan ejecutarse localmente. Sin publicar, tocar servicios ni alterar los cambios sin commit."
+- L2 — Se creó un worktree separado en `C:\Sistema\ecosystem\.worktrees\ch09-token-candidate`, desde main local e151832. No se reutilizaron ni limpiaron los worktrees existentes. La herramienta de worktrees administrados no permite seleccionar una raíz escribible en este perfil; se utilizó Git local con ruta explícita. CodeGraph se inicializó exclusivamente para este worktree.
+- L3 — Manifiesto previo en `C:\Sistema\ecosystem\.tmp\broker-token-candidate-20261015\preservation-before.json`: once worktrees, índices, referencias originales y 689 archivos permitidos. Se excluyen rutas de secretos prohibidas e índices regenerables CodeGraph. En seis worktrees fuera de las raíces escribibles Git no permite consultar status; se registraron sus commits, índices y archivos versionados sin modificarlos.
+- L4 — Dependencias locales disponibles, incluido better-sqlite3 operativo en memoria y Node 22.22.2. Se reutilizarán para lectura, sin instalación ni modificación; compilación y artefactos sólo en el candidato. No se ejecutará el script npm de publicación ni se leerán archivos de credenciales.
+- L5 — Política de prueba: observar RED antes de aplicar c60bf69, luego GREEN con la unidad y los tests actuales de main. Pruebas de headers simulan valores sintéticos; duplicados y captura de cookies se caracterizan, sin inventar validación nueva. RDD está desactivado en el clon original y no se activará.
+
+- L6 — Baseline aislada e151832: 112 casos, 109 aprobados, dos fallos impuestos por el guard de subprocesos y un skip de propiedad Linux. Tras permitir sólo parser PowerShell e inputs rechazados por validación antes del cuerpo, IIS 6/6; TypeScript aprobado después de generar build_info exclusivamente en scratch. Sin instalaciones ni mutaciones IIS.
+- L7 — RED observado antes de aplicar c60bf69: 44 casos, 19 aprobados y 25 fallos; entre ellos la inyección del token técnico y la combinación cliente/slot. Se corrigieron cinco premisas inválidas del harness: rutas raíz no publicadas, alias legado sin parser binario y peer dual sin ambas clases de slot. No se modificó producción para satisfacer esas premisas.
+- L8 — Se aplicó c60bf69 con cherry-pick sin commit. Se preservó el loader TimingStore posterior de main. Cobertura nueva: formas de headers, token ausente/vacío/inválido/duplicado, ambos tipos de slot y prefijos publicados, upstream HTTP efímero con pool real, login, API key y token humano sin cambios, cookies, mantenimiento, reciclado dual, beat Mini, respuesta que actualiza estado y reintento por slot dañado.
+- L9 — GREEN focal: 54/54. Generador local, TypeScript noEmit y emisión aprobados; el compilado de ages_pool coincide con la fuente. La única variación adicional de compilación era build_info y se retiró del worktree candidato, sin tocar artefactos ajenos. Preservación: once worktrees previos, índices, referencias y 689 archivos permitidos intactos.
+- L10 — Suite completa en el perfil actual: 137 casos, 129 aprobados, siete fallos y un skip. Fallos de entorno: cuatro archivos afectados por logger que intenta escribir en C:/etc/nages2/logdir, un archivo de origen TLS bloqueado por lectura de fixtures .pem y dos casos de state_bootstrap que requieren symlinks no permitidos. No se eludieron restricciones de lectura ni se solicitaron permisos. Esta ejecución no demuestra suite completa verde.
+- L11 — El guard redirige únicamente los dos logs legacy a archivos sintéticos dentro del directorio de pruebas; mantiene bloqueo de red externa, secretos y procesos no autorizados. Los fallos pendientes de fixtures, symlinks y propiedad Linux se informarán como límites, no como validaciones aprobadas. No se ejecutó AGES real ni se prueba aislamiento completo de identidad.

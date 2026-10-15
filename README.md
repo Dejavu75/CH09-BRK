@@ -217,3 +217,12 @@ La aplicación hija `/AGES/log` no se clona porque las rutas del broker no depen
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
 - Hosts y rutas: `../../ECOSISTEMA_ELEMENTOS_CONFIGURACION.md`
 - Índice de contratos: `../../docs/service-contract-index.md`
+
+
+## Token técnico del cliente en el proxy
+
+El proxy externo conserva únicamente el `AGES_TOKEN` aportado por el cliente; si falta, no agrega el del slot. En login lo omite, aunque el cliente lo envíe. Esto no reemplaza `AGES_USER_TOKEN` ni la API key del cliente. Warmup, ping directo y solicitudes internas siguen usando el token técnico del slot; el beat Mini retransmitido por el proxy sigue la política externa.
+
+La cookie `ASP.NET_SessionId` continúa ligada al slot. La captura de tokens y cookies de respuesta tampoco cambia: estas pruebas no demuestran aislamiento de identidad ni aceptación con DLL AGES reales. La normalización de headers duplicados conserva el comportamiento de `Headers`, sin agregar validación nueva.
+
+Pruebas locales: `node --test Tests/token_forwarding.test.js Tests/proxy_request_body.test.js Tests/dual_backend_routing.test.js Tests/incremental_warmup.test.js`. Usá un entorno de pruebas sin configuración operativa; los upstreams de estas pruebas son simulados o efímeros en loopback. La suite completa y TypeScript siguen siendo comprobaciones separadas.
