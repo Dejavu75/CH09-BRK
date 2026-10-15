@@ -598,3 +598,33 @@ requested that this arbitrary retention cap be removed.
   converged without manual mutation to 10 ready, 0 warming, 0 error, with
   A=5/B=5. An actual Certbot renewal has not been forced or observed, so T10
   remains partial for that evidence and for live attributable CA04/CA05 traffic.
+
+## Verified MS07 integration rollout — 2026-10-14
+
+- Root cause: NAGES was running `broker-introspection-4dc088e`, built from a
+  branch created before the merged `/analysis/ages` route. The public ingress
+  and BackGES `/healthmonitor` proxy were not the missing component.
+- Source candidate: MS07 `main` commit
+  `870db99fd03cdabe6ca5c35c7015d47435b32804`. Independent verification passed
+  `npm ci`, TypeScript/full tests (51/51), focused AGES and Broker tests
+  (20/20), Docker build, and HTTP/authentication probes.
+- Published immutable image:
+  `dhzacur/se_ms07_doc:broker-introspection-870db99`, registry digest
+  `sha256:795bb20f2663ec4941e14017000cc81fbfb7f0b92bb68c16776a6865cefe24f5`,
+  runtime image ID
+  `sha256:4ceeba7898aaa961a4489cd10a23265e2496f0f3c2cc13a5f1ffa18b5365d691`.
+  The transferred source archive matched SHA-256 on both hosts before build.
+- Deployment changed only the MS07 service image and ran Compose with
+  `--no-deps ms07`. The active Compose SHA-256 changed from
+  `d2656349301784b73d7af5bf749c08e2c9a6232105ade1e6e485e693a7e3ac6e` to
+  `91bcb0e349e58e115f92b870cc1308383a47a4047baf785865c666cb892ae3fa`.
+  No rollback was performed.
+- Runtime acceptance: `ms07-doc` was running with zero restarts; internal
+  summary returned HTTP 200; internal and public HTTPS `/analysis/ages`
+  returned HTTP 200 with the same eight AGES projections; Broker validation
+  returned 401 plus `Cache-Control: no-store` without authorization and 200
+  for a short-lived token generated inside MS07 without printing it.
+- Independent post-deployment verification reproduced those results and
+  confirmed the expected tag, image ID, and registry digest. CH09 retained
+  container ID `f1d2ae662496` with zero restarts, and Watchtower retained ID
+  `817c238b1a86` with zero restarts; neither was recreated or restarted.
