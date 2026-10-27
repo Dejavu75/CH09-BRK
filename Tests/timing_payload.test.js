@@ -36,6 +36,26 @@ function loadBrokerRouter(pool) {
   return exports.BrokerRouter;
 }
 
+test("los filtros presentan campos tematizados, agrupación propia y foco visible sin alterar sus controles", async t => {
+  const app = express();
+  app.use("/broker", loadBrokerRouter({}));
+  const base = await listen(http.createServer(app), t);
+  const html = await (await fetch(`${base}/broker/pool/timings/show`)).text();
+  const form = html.match(/<form id="timingFilters"[^>]*>([\s\S]*?)<\/form>/)[0];
+  assert.match(form, /aria-label="Filtros de timings"/);
+  assert.doesNotMatch(form, /class="actions"/);
+  assert.match(form, /class="filter-grid"/);
+  assert.equal((form.match(/class="filter-field/g) || []).length, 5);
+  assert.match(form, /class="filter-actions"/);
+  for (const name of ["from", "to", "url", "result", "minTotalMs"]) {
+    assert.match(form, new RegExp(`name="${name}"`));
+  }
+  assert.match(html, /#timingFilters input, #timingFilters select\s*\{[^}]*height: 36px;[^}]*background: #0f172a;/);
+  assert.match(html, /#timingFilters[^{}]*:focus-visible\s*\{[^}]*outline: 2px solid #93c5fd;/);
+  assert.match(html, /@media \(max-width: 560px\)/);
+  assert.match(form, /id="filterStatus" role="status" aria-live="polite"/);
+});
+
 test("timing API validates and forwards combined filters without querying invalid inputs", async t => {
   const calls = [];
   const app = express();

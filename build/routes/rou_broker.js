@@ -422,6 +422,31 @@ function renderTimingPage(req) {
     summary { cursor: pointer; color: #93c5fd; }
     .copy-status { color: #94a3b8; font-size: 13px; min-width: 88px; align-self: center; }
     pre { overflow: auto; font: 12px Consolas, Monaco, monospace; }
+    #timingFilters { margin-bottom: 16px; padding: 16px; border: 1px solid #334155; border-radius: 8px; background: #111827; }
+    #timingFilters .filter-grid { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) minmax(220px, 1.5fr) minmax(130px, .8fr) minmax(150px, .9fr); gap: 12px; align-items: end; }
+    #timingFilters .filter-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: #cbd5e1; font-size: 12px; line-height: 16px; }
+    #timingFilters input, #timingFilters select { width: 100%; min-width: 0; height: 36px; padding: 7px 10px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; color: #e5e7eb; font: 13px Arial, sans-serif; }
+    #timingFilters input:hover, #timingFilters select:hover { border-color: #94a3b8; }
+    #timingFilters input:focus-visible, #timingFilters select:focus-visible, #timingFilters button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+    #timingFilters input:disabled, #timingFilters select:disabled, #timingFilters button:disabled { opacity: .5; cursor: not-allowed; }
+    #timingFilters .filter-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 12px; }
+    #timingFilters button { min-height: 36px; }
+    #timingFilters button[type="submit"] { border-color: #0f766e; background: #0f766e; }
+    #timingFilters button[type="submit"]:hover { border-color: #115e59; background: #115e59; }
+    #timingFilters button[type="reset"] { border-color: #334155; background: transparent; color: #cbd5e1; }
+    #timingFilters button[type="reset"]:hover { background: #1e293b; }
+    #timingFilters #filterStatus { display: block; margin-top: 12px; color: #fecaca; font-size: 13px; line-height: 1.4; }
+    #timingFilters #filterStatus:empty { margin-top: 0; }
+    @media (max-width: 1000px) {
+      #timingFilters .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #timingFilters .filter-endpoint { grid-column: 1 / -1; }
+    }
+    @media (max-width: 560px) {
+      #timingFilters { padding: 12px; }
+      #timingFilters .filter-grid { grid-template-columns: minmax(0, 1fr); }
+      #timingFilters .filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #timingFilters input, #timingFilters select, #timingFilters button { min-height: 40px; }
+    }
   </style>
 </head>
 <body>
@@ -439,18 +464,22 @@ function renderTimingPage(req) {
         <span id="copyStatus" class="copy-status"></span>
       </div>
     </header>
-    <form id="timingFilters" class="actions" style="flex-wrap:wrap;margin-bottom:16px">
-      <label>Desde <input name="from" type="datetime-local" step="1"></label>
-      <label>Hasta <input name="to" type="datetime-local" step="1"></label>
-      <label>Endpoint contiene <input name="url" type="search" maxlength="512"></label>
-      <label>Resultado <select name="result">
-        <option value="">Todos</option><option value="errors">Con error</option>
-        <option value="2xx">HTTP 2xx</option><option value="3xx">HTTP 3xx</option>
-        <option value="4xx">HTTP 4xx</option><option value="5xx">HTTP 5xx</option>
-      </select></label>
-      <label>Total mínimo (ms) <input name="minTotalMs" type="number" min="0" step="1" max="9007199254740991"></label>
-      <button type="submit">Aplicar filtros</button>
-      <button type="reset">Restablecer filtros</button>
+    <form id="timingFilters" aria-label="Filtros de timings">
+      <div class="filter-grid">
+        <label class="filter-field">Desde <input name="from" type="datetime-local" step="1"></label>
+        <label class="filter-field">Hasta <input name="to" type="datetime-local" step="1"></label>
+        <label class="filter-field filter-endpoint">Endpoint contiene <input name="url" type="search" maxlength="512"></label>
+        <label class="filter-field">Resultado <select name="result">
+          <option value="">Todos</option><option value="errors">Con error</option>
+          <option value="2xx">HTTP 2xx</option><option value="3xx">HTTP 3xx</option>
+          <option value="4xx">HTTP 4xx</option><option value="5xx">HTTP 5xx</option>
+        </select></label>
+        <label class="filter-field">Total mínimo (ms) <input name="minTotalMs" type="number" min="0" step="1" max="9007199254740991"></label>
+      </div>
+      <div class="filter-actions">
+        <button type="submit">Aplicar filtros</button>
+        <button type="reset">Restablecer filtros</button>
+      </div>
       <span id="filterStatus" role="status" aria-live="polite"></span>
     </form>
     <div class="table-wrap">
