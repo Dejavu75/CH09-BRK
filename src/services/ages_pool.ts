@@ -625,6 +625,7 @@ export class AgesConnectionPool {
       return await this.initializeSlotTracked(slot);
     } finally {
       slot.maintenanceInFlight--;
+      this.trackDualMaintenanceFailure(slot);
     }
   }
 
@@ -791,8 +792,11 @@ export class AgesConnectionPool {
         `err=${slot.lastError ? "upstream-error" : "unknown"}`
       ].join(" | ")
     );
+  }
 
-    if (this.backendConfiguration.mode === "dual" && recycledStatus === "error" && slot.lastStatusCode === 500) {
+  private trackDualMaintenanceFailure(slot: AgesPoolSlot): void {
+    if (this.backendConfiguration.mode !== "dual") return;
+    if (slot.status === "error" && (slot.lastStatusCode === 500 || slot.lastStatusCode === 503)) {
       const failed = this.failedSlotRecycles.get(slot.backendId) ?? new Set<number>();
       failed.add(slot.id);
       this.failedSlotRecycles.set(slot.backendId, failed);
@@ -803,15 +807,15 @@ export class AgesConnectionPool {
   }
 
   private scheduleBackendRecycleForFailedSlots(id: AgesBackendId, failedCount: number): void {
-    if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle || this.warmupPromise) return;
+    if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle) return;
     this.scheduledBackendRecycles.add(id);
-    // Defer until the slot's maintenance counter has been released before the directed drain begins.
+    // Esperar al warmup y liberar mantenimiento antes de iniciar el drenaje dirigido.
     setImmediate(() => {
-      if ((this.failedSlotRecycles.get(id)?.size ?? 0) < 2) {
-        this.scheduledBackendRecycles.delete(id);
-        return;
-      }
-      void this.drainAndRecycleBackend(id).catch((error) => {
+      void (async () => {
+        if (this.warmupPromise) await this.warmupPromise;
+        if ((this.failedSlotRecycles.get(id)?.size ?? 0) < 2 || this.lifecycle) return;
+        await this.drainAndRecycleBackend(id);
+      })().catch((error) => {
         warn(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
       }).finally(() => {
         this.scheduledBackendRecycles.delete(id);

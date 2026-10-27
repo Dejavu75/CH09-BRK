@@ -360,12 +360,12 @@ test("does not combine backend cohorts and removes a recovered slot", async () =
   });
 });
 
-test("does not count a slot whose final recycle response is not HTTP 500", async () => {
+test("does not count a slot whose final recycle response is neither HTTP 500 nor 503", async () => {
   let failing = false;
   const recycled = [];
   await withFetch(async (url) => {
     if (!failing || String(url).includes("ages-b")) return ready(url);
-    return new Response("failed", { status: String(url).includes("~mini~") ? 503 : 500 });
+    return new Response("failed", { status: String(url).includes("~mini~") ? 502 : 500 });
   }, async () => {
     const pool = new AgesConnectionPool("http://legacy", endpoints, dual, {
       recycleExecutor: async (id) => { recycled.push(id); }
@@ -394,7 +394,7 @@ test("removes a prior HTTP 500 when the same slot later fails with another statu
     const [mini, bigb] = pool.slots.filter((slot) => slot.backendId === "A");
     miniStatus = 500;
     await pool.pingSlot(mini);
-    miniStatus = 503;
+    miniStatus = 502;
     await pool.pingSlot(mini);
     bigbStatus = 500;
     await pool.pingSlot(bigb);
