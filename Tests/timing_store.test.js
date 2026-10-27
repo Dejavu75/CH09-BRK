@@ -7,6 +7,53 @@ const path = require("node:path");
 const { AgesConnectionPool } = require("../build/services/ages_pool");
 const { TimingStore } = require("../build/services/timing_store");
 
+test("timing filters search the full history before pagination and compose inclusively", t => {
+  const store = new TimingStore();
+  t.after(() => store.close());
+  for (let index = 0; index < 240; index++) store.upsert({
+    id: String(index), brokerInAt: "2026-10-16T12:00:00.000Z",
+    url: index < 140 ? "/ages/Clientes.ages" : "/ages/other.ages",
+    status: 500, totalMs: 2000
+  });
+  const filters = { from: "2026-10-16T12:00:00Z", to: "2026-10-16T12:00:00Z",
+    url: "clientes", result: "5xx", minTotalMs: 2000 };
+  const first = store.page(undefined, filters);
+  assert.equal(first.rows.length, 100);
+  assert.equal(first.rows[0].id, "139");
+  const second = store.page(first.nextCursor, filters);
+  assert.equal(second.rows.length, 40);
+  assert.equal(second.rows.at(-1).id, "0");
+  assert.equal(second.nextCursor, undefined);
+  assert.equal(store.page(undefined, { ...filters, minTotalMs: 2001 }).rows.length, 0);
+  assert.equal(store.page(undefined, { ...filters, result: "2xx" }).rows.length, 0);
+  assert.equal(store.page(undefined, { url: "%" }).rows.length, 0, "URL search is literal");
+  assert.equal(store.page().rows[0].id, "239", "unfiltered history is unchanged");
+  assert.equal(store.page().rows.length, 100);
+});
+
+test("timing error filters include HTTP failures and transport errors without matching pending calls", t => {
+  const store = new TimingStore();
+  t.after(() => store.close());
+  for (const row of [{ id: "ok", status: 200 }, { id: "http", status: 404 },
+    { id: "transport", error: "upstream_error" }, { id: "pending" }]) store.upsert(row);
+  assert.deepEqual(store.page(undefined, { result: "errors" }).rows.map(row => row.id), ["transport", "http"]);
+  assert.deepEqual(store.page(undefined, { result: "200" }).rows.map(row => row.id), ["ok"]);
+  assert.equal(store.page(undefined, { minTotalMs: 0 }).rows.length, 0, "missing duration is not zero");
+});
+
+test("live timing filters run before the live limit and do not repeat on older pages", t => {
+  const pool = new AgesConnectionPool("http://synthetic/ages", []);
+  t.after(() => pool.closeTimingStore());
+  pool.createTimingTrace("mini", "GET", "http://synthetic/ages/matching.ages", "", "", Date.now());
+  for (let index = 0; index < 110; index++) {
+    pool.createTimingTrace("mini", "GET", "http://synthetic/ages/other.ages", "", "", Date.now());
+  }
+  const filters = { url: "matching" };
+  assert.equal(pool.getTimingLog(undefined, filters).liveRows.length, 1);
+  assert.equal(pool.getTimingLog(undefined, { minTotalMs: 0 }).liveRows.length, 0);
+  assert.equal(pool.getTimingLog(1, filters).liveRows, undefined);
+});
+
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "broker-timings-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

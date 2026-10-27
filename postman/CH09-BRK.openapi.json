@@ -229,7 +229,74 @@
       "get": {
         "summary": "Pool timing traces",
         "operationId": "get_foreign_broker_pool_timings",
-        "parameters": [],
+        "description": "Filters combine with AND and run before cursor pagination (100 finalized rows). The first page may also include up to 100 matching liveRows. Invalid filters return HTTP 400 without mutation. No filters preserves existing behavior.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Positive keyset cursor from nextCursor. Preserve filters when paging.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive brokerInAt bound. ISO 8601 with seconds and explicit timezone; from must not exceed to.",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive brokerInAt bound. ISO 8601 with seconds and explicit timezone; from must not exceed to.",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "required": false,
+            "description": "Literal case-insensitive endpoint substring; does not search query parameters or bodies.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "required": false,
+            "description": "HTTP class, exact code 100-599, or errors (HTTP >=400 or recorded error).",
+            "schema": {
+              "type": "string",
+              "pattern": "^(errors|[2-5]xx|[1-5][0-9]{2})$"
+            }
+          },
+          {
+            "name": "minTotalMs",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive minimum total duration in milliseconds; records without totalMs are excluded.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Respuesta exitosa"

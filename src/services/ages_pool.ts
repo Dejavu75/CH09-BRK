@@ -6,7 +6,7 @@ import { readFileSync, statSync } from "fs";
 import { isIP } from "node:net";
 import { promisify } from "util";
 
-import { TimingStore } from "./timing_store";
+import { TimingStore, TimingFilters, matchesTimingFilters } from "./timing_store";
 import { log, sendDebugMail, warn } from "../utils/logger";
 
 const AGES_BASE_URL = process.env.HAAGES ?? "http://localhost/ages";
@@ -346,11 +346,12 @@ export class AgesConnectionPool {
     };
   }
 
-  getTimingLog(cursor?: number): { rows: AgesTimingTrace[]; liveRows?: AgesTimingTrace[]; nextCursor?: number } {
-    const page = this.timingStore.page(cursor);
+  getTimingLog(cursor?: number, filters: TimingFilters = {}): { rows: AgesTimingTrace[]; liveRows?: AgesTimingTrace[]; nextCursor?: number } {
+    const page = this.timingStore.page(cursor, filters);
     if (cursor !== undefined || this.liveTimings.size === 0) return page;
 
     const liveRows = [...this.liveTimings.values()]
+      .filter(trace => matchesTimingFilters(trace, filters))
       .sort((left, right) => right.brokerInAt.localeCompare(left.brokerInAt) || right.id.localeCompare(left.id))
       .slice(0, TimingStore.PAGE_SIZE)
       .map(trace => ({ ...trace }));

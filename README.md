@@ -90,6 +90,34 @@ La vista sólo muestra una página de historial a la vez. Se debe monitorear
 espacio en disco y conservar
 backups del volumen persistente según la política operativa.
 
+### Filtros de timings
+
+La ventana permite combinar fecha/hora desde y hasta (inclusivas), texto del
+endpoint, resultado HTTP y duración total mínima en milisegundos. Las fechas
+se ingresan en la zona horaria del navegador y se envían como instantes UTC.
+**Aplicar filtros** vuelve al inicio; **Restablecer filtros** elimina los
+criterios sin borrar registros. La actualización automática y **Más antiguos**
+conservan los filtros aplicados. **Ocultar beat interno** sigue siendo un
+filtro visual sobre la página recibida.
+
+El endpoint acepta los siguientes parámetros opcionales, combinados con AND:
+
+| Parámetro | Semántica |
+| --- | --- |
+| `from`, `to` | Fecha ISO 8601 con segundos y zona horaria explícita; límites inclusivos sobre `brokerInAt`. |
+| `url` | Subcadena literal del endpoint, sin distinguir mayúsculas; máximo 512 caracteres. No busca parámetros ni cuerpos. |
+| `result` | `errors`, `2xx`, `3xx`, `4xx`, `5xx` o código HTTP exacto entre 100 y 599. `errors` incluye HTTP >= 400 o un error de transporte/evento. |
+| `minTotalMs` | Entero no negativo, hasta 9007199254740991; duración total mayor o igual. Excluye registros sin duración total. |
+| `cursor` | Cursor positivo devuelto por la página anterior; conservar los mismos filtros al continuar. |
+
+Ejemplo: `/foreign/broker/pool/timings?url=clientes&result=errors&minTotalMs=2000`.
+Los filtros se aplican a todo el historial **antes** del límite de 100 filas
+y también a las llamadas en curso antes de limitar `liveRows`. Una duración
+todavía desconocida no se interpreta como cero. Un valor inválido o un rango
+de fechas invertido devuelve HTTP 400 sin modificar el historial. Omitir los
+filtros conserva la paginación anterior. El filtrado no crea índices nuevos:
+una búsqueda selectiva puede recorrer muchos registros en historiales grandes.
+
 El login limita intentos por IP cliente. Un barrido periódico, acotado a 1.000
 entradas por ciclo, elimina intentos vencidos y sesiones caducadas del estado
 persistente sin cerrar sesiones activas. Sin configuración adicional se usa

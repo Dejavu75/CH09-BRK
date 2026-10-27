@@ -190,11 +190,12 @@ class AgesConnectionPool {
             slots
         };
     }
-    getTimingLog(cursor) {
-        const page = this.timingStore.page(cursor);
+    getTimingLog(cursor, filters = {}) {
+        const page = this.timingStore.page(cursor, filters);
         if (cursor !== undefined || this.liveTimings.size === 0)
             return page;
         const liveRows = [...this.liveTimings.values()]
+            .filter(trace => (0, timing_store_1.matchesTimingFilters)(trace, filters))
             .sort((left, right) => right.brokerInAt.localeCompare(left.brokerInAt) || right.id.localeCompare(left.id))
             .slice(0, timing_store_1.TimingStore.PAGE_SIZE)
             .map(trace => (Object.assign({}, trace)));
@@ -441,6 +442,7 @@ class AgesConnectionPool {
             }
             finally {
                 slot.maintenanceInFlight--;
+                this.trackDualMaintenanceFailure(slot);
             }
         });
     }
@@ -566,7 +568,6 @@ class AgesConnectionPool {
     }
     recycleSlot(slot, pingUrl) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
             (0, logger_1.warn)([
                 `recycle start`,
                 this.formatSlot(slot),
@@ -592,29 +593,36 @@ class AgesConnectionPool {
                 `st=${recycledStatus}`,
                 `err=${slot.lastError ? "upstream-error" : "unknown"}`
             ].join(" | "));
-            if (this.backendConfiguration.mode === "dual" && recycledStatus === "error" && slot.lastStatusCode === 500) {
-                const failed = (_a = this.failedSlotRecycles.get(slot.backendId)) !== null && _a !== void 0 ? _a : new Set();
-                failed.add(slot.id);
-                this.failedSlotRecycles.set(slot.backendId, failed);
-                this.scheduleBackendRecycleForFailedSlots(slot.backendId, failed.size);
-            }
-            else {
-                (_b = this.failedSlotRecycles.get(slot.backendId)) === null || _b === void 0 ? void 0 : _b.delete(slot.id);
-            }
         });
     }
+    trackDualMaintenanceFailure(slot) {
+        var _a, _b;
+        if (this.backendConfiguration.mode !== "dual")
+            return;
+        if (slot.status === "error" && (slot.lastStatusCode === 500 || slot.lastStatusCode === 503)) {
+            const failed = (_a = this.failedSlotRecycles.get(slot.backendId)) !== null && _a !== void 0 ? _a : new Set();
+            failed.add(slot.id);
+            this.failedSlotRecycles.set(slot.backendId, failed);
+            this.scheduleBackendRecycleForFailedSlots(slot.backendId, failed.size);
+        }
+        else {
+            (_b = this.failedSlotRecycles.get(slot.backendId)) === null || _b === void 0 ? void 0 : _b.delete(slot.id);
+        }
+    }
     scheduleBackendRecycleForFailedSlots(id, failedCount) {
-        if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle || this.warmupPromise)
+        if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle)
             return;
         this.scheduledBackendRecycles.add(id);
-        // Defer until the slot's maintenance counter has been released before the directed drain begins.
+        // Esperar al warmup y liberar mantenimiento antes de iniciar el drenaje dirigido.
         setImmediate(() => {
-            var _a, _b;
-            if (((_b = (_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) < 2) {
-                this.scheduledBackendRecycles.delete(id);
-                return;
-            }
-            void this.drainAndRecycleBackend(id).catch((error) => {
+            void (() => __awaiter(this, void 0, void 0, function* () {
+                var _a, _b;
+                if (this.warmupPromise)
+                    yield this.warmupPromise;
+                if (((_b = (_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) < 2 || this.lifecycle)
+                    return;
+                yield this.drainAndRecycleBackend(id);
+            }))().catch((error) => {
                 (0, logger_1.warn)(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
             }).finally(() => {
                 this.scheduledBackendRecycles.delete(id);

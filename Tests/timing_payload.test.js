@@ -36,6 +36,84 @@ function loadBrokerRouter(pool) {
   return exports.BrokerRouter;
 }
 
+test("timing API validates and forwards combined filters without querying invalid inputs", async t => {
+  const calls = [];
+  const app = express();
+  app.use("/broker", loadBrokerRouter({ getTimingLog(...args) { calls.push(args); return { rows: [] }; } }));
+  const base = await listen(http.createServer(app), t);
+  const query = "from=2026-10-16T12:00:00Z&to=2026-10-16T13:00:00Z&url=clientes&result=errors&minTotalMs=2000&cursor=42";
+  const response = await fetch(`${base}/broker/pool/timings?${query}`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { rows: [] });
+  assert.equal(calls[0][0], 42);
+  assert.equal(JSON.stringify(calls[0][1]), JSON.stringify({ from: "2026-10-16T12:00:00Z",
+    to: "2026-10-16T13:00:00Z", url: "clientes", result: "errors", minTotalMs: 2000 }));
+  for (const invalid of ["from=not-a-date", "from=2026-10-16", "from=2026-02-30T12:00:00Z", "minTotalMs=-1", "minTotalMs=NaN",
+    "minTotalMs=1&minTotalMs=2", "result=600", "result=oops", "url[x]=bad",
+    "from=2026-10-17T00:00:00Z&to=2026-10-16T00:00:00Z"]) {
+    assert.equal((await fetch(`${base}/broker/pool/timings?${invalid}`)).status, 400, invalid);
+  }
+  assert.equal(calls.length, 1);
+  const html = await (await fetch(`${base}/broker/pool/timings/show`)).text();
+  assert.match(html, /id="timingFilters"/);
+  assert.match(html, /datetime-local/);
+  assert.match(html, /minTotalMs/);
+});
+
+test("timing window preserves applied filters on refresh and pagination, resets to the first page, and rejects stale responses", async t => {
+  const app = express();
+  app.use("/broker", loadBrokerRouter({}));
+  const base = await listen(http.createServer(app), t);
+  const html = await (await fetch(`${base}/broker/pool/timings/show`)).text();
+  const elements = new Map();
+  function element(id) {
+    if (!elements.has(id)) elements.set(id, { checked: true, disabled: false, textContent: "", innerHTML: "",
+      listeners: {}, addEventListener(event, handler) { this.listeners[event] = handler; } });
+    return elements.get(id);
+  }
+  const requests = [];
+  let fields = [];
+  let completeDelayed;
+  let delayNext = false;
+  const context = {
+    document: { getElementById: element, querySelector: element }, URLSearchParams, Date, Intl,
+    FormData: class { constructor() { return fields[Symbol.iterator](); } },
+    window: { setTimeout() {} }, setInterval() {},
+    fetch: async url => {
+      requests.push(new URL(url, base));
+      if (delayNext) {
+        delayNext = false;
+        return new Promise(resolve => { completeDelayed = () => resolve({ ok: true,
+          json: async () => ({ rows: [{ id: "stale" }], nextCursor: 1 }) }); });
+      }
+      return { ok: true, json: async () => ({ rows: [{ id: "current" }], nextCursor: 42 }) };
+    }
+  };
+  vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], context);
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  await flush();
+  fields = [["url", "clientes"], ["from", "2026-10-16T12:00:00"], ["result", "errors"], ["minTotalMs", "2000"]];
+  element("timingFilters").listeners.submit({ preventDefault() {} });
+  await flush();
+  assert.equal(requests.at(-1).searchParams.get("from"), new Date(fields[1][1]).toISOString());
+  assert.equal(requests.at(-1).searchParams.get("url"), "clientes");
+  await element("olderTimings").listeners.click();
+  assert.equal(requests.at(-1).searchParams.get("cursor"), "42");
+  assert.equal(requests.at(-1).searchParams.get("result"), "errors");
+  await element("refreshTimings").listeners.click();
+  assert.equal(requests.at(-1).searchParams.get("minTotalMs"), "2000");
+  delayNext = true;
+  const delayed = element("refreshTimings").listeners.click();
+  element("timingFilters").listeners.reset();
+  await flush();
+  assert.equal(requests.at(-1).search, "");
+  completeDelayed();
+  await delayed;
+  assert.ok(element("pre").textContent.includes("current"));
+  assert.ok(!element("pre").textContent.includes("stale"));
+  assert.equal(element("newerTimings").disabled, true);
+});
+
 async function listen(server, t) {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));

@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { getHeartBeat } from "se_configbase";
 
 import { agesConnectionPool } from "../services/ages_pool";
+import type { TimingFilters } from "../services/timing_store";
 import { configureHeartbeatExtraData } from "../services/heartbeat_metadata";
 import { warn } from "../utils/logger";
 import { BROKER_BUILD_INFO } from "../generated/build_info";
@@ -43,7 +44,40 @@ BrokerRouter.get("/pool/timings", (req, res) => {
     res.status(400).json({ error: "Invalid timing cursor" });
     return;
   }
-  res.json(agesConnectionPool.getTimingLog(rawCursor === undefined ? undefined : Number(rawCursor)));
+  const filters: TimingFilters = {};
+  for (const key of ["from", "to", "url", "result", "minTotalMs"] as const) {
+    const value = req.query[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+      res.status(400).json({ error: `Invalid timing filter: ${key}` });
+      return;
+    }
+    if (key === "minTotalMs") {
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        res.status(400).json({ error: "Invalid timing filter: minTotalMs" });
+        return;
+      }
+      filters.minTotalMs = Number(value);
+    } else {
+      if ((key === "from" || key === "to") &&
+        (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) ||
+          !Number.isFinite(Date.parse(value)) || Number(value.slice(11, 13)) > 23 ||
+          new Date(value.slice(0, 10) + "T00:00:00Z").toISOString().slice(0, 10) !== value.slice(0, 10))) {
+        res.status(400).json({ error: `Invalid timing filter: ${key}` });
+        return;
+      }
+      if (key === "result" && !/^(errors|[2-5]xx|[1-5]\d{2})$/.test(value)) {
+        res.status(400).json({ error: "Invalid timing filter: result" });
+        return;
+      }
+      filters[key] = value;
+    }
+  }
+  if (filters.from && filters.to && Date.parse(filters.from) > Date.parse(filters.to)) {
+    res.status(400).json({ error: "Timing filter from must not exceed to" });
+    return;
+  }
+  res.json(agesConnectionPool.getTimingLog(rawCursor === undefined ? undefined : Number(rawCursor), filters));
 });
 
 BrokerRouter.post("/pool/timings/clear", (_req, res) => {
@@ -451,6 +485,20 @@ function renderTimingPage(req: Request): string {
         <span id="copyStatus" class="copy-status"></span>
       </div>
     </header>
+    <form id="timingFilters" class="actions" style="flex-wrap:wrap;margin-bottom:16px">
+      <label>Desde <input name="from" type="datetime-local" step="1"></label>
+      <label>Hasta <input name="to" type="datetime-local" step="1"></label>
+      <label>Endpoint contiene <input name="url" type="search" maxlength="512"></label>
+      <label>Resultado <select name="result">
+        <option value="">Todos</option><option value="errors">Con error</option>
+        <option value="2xx">HTTP 2xx</option><option value="3xx">HTTP 3xx</option>
+        <option value="4xx">HTTP 4xx</option><option value="5xx">HTTP 5xx</option>
+      </select></label>
+      <label>Total mínimo (ms) <input name="minTotalMs" type="number" min="0" step="1" max="9007199254740991"></label>
+      <button type="submit">Aplicar filtros</button>
+      <button type="reset">Restablecer filtros</button>
+      <span id="filterStatus" role="status" aria-live="polite"></span>
+    </form>
     <div class="table-wrap">
       <table>
         <thead>
@@ -494,6 +542,9 @@ function renderTimingPage(req: Request): string {
     const newerTimings = document.getElementById("newerTimings");
     const olderTimings = document.getElementById("olderTimings");
     const refreshButton = document.getElementById("refreshTimings");
+    const filterForm = document.getElementById("timingFilters");
+    const filterStatus = document.getElementById("filterStatus");
+    let activeFilters = new URLSearchParams();
     let timingRows = [];
     let currentCursor;
     let nextCursor;
@@ -576,11 +627,20 @@ function renderTimingPage(req: Request): string {
     async function refreshTimings() {
       const cursor = currentCursor;
       const version = ++requestVersion;
-      const url = cursor === undefined ? timingsPath : timingsPath + "?cursor=" + cursor;
-      const response = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!response.ok) return;
-      const page = await response.json();
+      const query = new URLSearchParams(activeFilters);
+      if (cursor !== undefined) query.set("cursor", cursor);
+      const url = timingsPath + (query.size ? "?" + query.toString() : "");
+      let page;
+      try {
+        const response = await fetch(url, { headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error("timings status " + response.status);
+        page = await response.json();
+      } catch (_error) {
+        if (version === requestVersion) filterStatus.textContent = "No se pudieron cargar los registros. Verifique los filtros e intente nuevamente.";
+        return;
+      }
       if (version !== requestVersion || cursor !== currentCursor) return;
+      filterStatus.textContent = "";
       timingRows = [...(page.liveRows || []), ...page.rows];
       nextCursor = page.nextCursor;
       newerTimings.disabled = currentCursor === undefined;
@@ -623,6 +683,27 @@ function renderTimingPage(req: Request): string {
         if (copyStatus.textContent === text) copyStatus.textContent = "";
       }, 1800);
     }
+
+    function applyFilters(query) {
+      activeFilters = query;
+      currentCursor = undefined;
+      nextCursor = undefined;
+      olderTimings.disabled = true;
+      newerTimings.disabled = true;
+      timingRows = [];
+      renderTimings();
+      void refreshTimings();
+    }
+
+    filterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const query = new URLSearchParams();
+      for (const [key, value] of new FormData(filterForm)) {
+        if (value) query.set(key, key === "from" || key === "to" ? new Date(value).toISOString() : value);
+      }
+      applyFilters(query);
+    });
+    filterForm.addEventListener("reset", () => applyFilters(new URLSearchParams()));
 
     refreshTimings();
     setInterval(() => { if (currentCursor === undefined) void refreshTimings(); }, 5000);

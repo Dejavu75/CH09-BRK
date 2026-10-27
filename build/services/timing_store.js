@@ -4,9 +4,27 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TimingStore = void 0;
+exports.matchesTimingFilters = matchesTimingFilters;
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+function matchesTimingFilters(row, filters) {
+    var _a, _b, _c, _d, _e;
+    const time = Date.parse((_a = row.brokerInAt) !== null && _a !== void 0 ? _a : "");
+    if (filters.from && !(time >= Date.parse(filters.from)))
+        return false;
+    if (filters.to && !(time <= Date.parse(filters.to)))
+        return false;
+    if (filters.url && !((_b = row.url) !== null && _b !== void 0 ? _b : "").toLowerCase().includes(filters.url.toLowerCase()))
+        return false;
+    if (filters.minTotalMs !== undefined && !(row.totalMs !== undefined && row.totalMs >= filters.minTotalMs))
+        return false;
+    if (filters.result === "errors")
+        return Boolean(row.error) || ((_c = row.status) !== null && _c !== void 0 ? _c : 0) >= 400;
+    if ((_d = filters.result) === null || _d === void 0 ? void 0 : _d.endsWith("xx"))
+        return Math.floor(((_e = row.status) !== null && _e !== void 0 ? _e : 0) / 100) === Number(filters.result[0]);
+    return !filters.result || row.status === Number(filters.result);
+}
 class TimingStore {
     constructor(path) {
         if (path !== undefined) {
@@ -37,12 +55,13 @@ class TimingStore {
       payload TEXT NOT NULL
     )`);
     }
-    page(cursor) {
-        const rows = (cursor === undefined
-            ? this.db.prepare("SELECT sequence, payload FROM timing_records ORDER BY sequence DESC LIMIT ?")
-                .all(TimingStore.PAGE_SIZE + 1)
-            : this.db.prepare("SELECT sequence, payload FROM timing_records WHERE sequence < ? ORDER BY sequence DESC LIMIT ?")
-                .all(cursor, TimingStore.PAGE_SIZE + 1));
+    page(cursor, filters = {}) {
+        // Apply the same predicate to persisted and live traces, before either page limit.
+        this.db.function("timing_matches", (payload) => matchesTimingFilters(JSON.parse(payload), filters) ? 1 : 0);
+        const rows = this.db.prepare(`SELECT sequence, payload FROM timing_records
+      WHERE (? IS NULL OR sequence < ?) AND timing_matches(payload)
+      ORDER BY sequence DESC LIMIT ?`)
+            .all(cursor !== null && cursor !== void 0 ? cursor : null, cursor !== null && cursor !== void 0 ? cursor : null, TimingStore.PAGE_SIZE + 1);
         const hasMore = rows.length > TimingStore.PAGE_SIZE;
         const visible = rows.slice(0, TimingStore.PAGE_SIZE);
         const payload = { rows: visible.map(row => JSON.parse(row.payload)) };
