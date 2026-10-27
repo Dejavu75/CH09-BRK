@@ -34,7 +34,7 @@ function loadSource(relativePath, dependencies) {
 
 function createProxy(upstreamUrl, options = {}) {
   let authInitialized = false;
-  const pool = {
+  const pool = options.pool ?? {
     async proxyCall(_kind, _name, _query, init) {
       if (options.proxyError) throw options.proxyError;
       assert.equal(init.headers["content-length"], undefined, "fetch must calculate body length");
@@ -67,16 +67,16 @@ function createProxy(upstreamUrl, options = {}) {
     "./routes/rou_broker": router,
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
+    "./services/tls_reloader": { startTlsCertificateReload() { return () => {}; } },
     "./auth/auth_service": { BrokerAuthService: class { constructor() { authInitialized = true; } } },
     "./auth/central_beat": { verifyMs07BeatCentrally() {} },
-    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; },
-      requireSecureTransport(_req, _res, next) { next(); } },
+    "./auth/http": { createAuthHttp() { return { routes: require("express").Router(), gate(_req, _res, next) { next(); } }; } },
     "./auth/service_key": { loadServiceKey() {
       assert.equal(authInitialized, true, "auth state must be initialized before loading the generated service key");
       return "synthetic-service-key-with-32-bytes";
     } },
     "./auth/trusted_proxy": { trustedProxyAddresses: () => false },
-    "./utils/logger": { log() {}, error() {}, isConfigEnabled: () => true },
+    "./utils/logger": { log() {}, warn() {}, error() {}, isConfigEnabled: () => true },
     http: { createServer(value) { app = value; return { listen() {} }; } }
   });
   return http.createServer(app);
@@ -198,3 +198,55 @@ test("proxy failure log excludes query values and upstream error messages", asyn
   assert.match(warnings[0], /err=Error/);
   assert.doesNotMatch(warnings[0], /secret-|token=/);
 });
+
+
+for (const prefix of ["/ages", "/foreign/broker/ages"]) {
+  for (const kind of ["bigb", "mini"]) {
+    test(`${prefix || "root"} ${kind}: real pool forwards only caller tokens`, { timeout: 10000 }, async t => {
+      const seen = [];
+      const upstream = http.createServer((req, res) => {
+        if (req.url.includes("dummy_val.ages")) {
+          res.setHeader("AGES_TOKEN", "upstream-slot-token");
+          res.setHeader("Set-Cookie", "ASP.NET_SessionId=upstream-session; Path=/");
+          return res.end("ready");
+        }
+        const chunks = [];
+        req.on("data", chunk => chunks.push(chunk));
+        req.on("end", () => {
+          seen.push({ headers: req.headers, body: Buffer.concat(chunks), url: req.url });
+          res.statusCode = req.headers.ages_token === "invalid" ? 401 : 200;
+          res.end(res.statusCode === 200 ? "ok" : "denied");
+        });
+      });
+      const url = await listen(upstream, t);
+      const Pool = require("./helpers/token_pool").loadPool();
+      const pool = new Pool(url, [{ kind }], { mode: "legacy", backends: [{ id: "legacy", baseUrl: url }] });
+      t.after(() => pool.closeTimingStore());
+      await pool.warmUp();
+      const proxy = await listen(createProxy(url, { pool }), t);
+      const body = Buffer.from([0, 255, 65]);
+      for (const [token, expected] of [[undefined, undefined], ["client", "client"], ["invalid", "invalid"], ["", ""], [["first", "second"], "first, second"]]) {
+        const headers = { AGES_USER_TOKEN: "human-token", "X-AGES-API-Key": "caller-key",
+          "X-Broker-Service-Api-Key": "broker-only", Cookie: "other=keep; ASP.NET_SessionId=untrusted; __Host-broker_session=private" };
+        if (token !== undefined) headers.AgEs_ToKeN = token;
+        const target = `${proxy}${prefix}${kind === "mini" ? "/~mini~" : ""}/probe?value=1`;
+        const result = await request(target, "POST", headers, body);
+        const actual = seen.at(-1);
+        assert.equal(result.status, token === "invalid" ? 401 : 200, result.body.toString());
+        assert.equal(actual.headers.ages_token, expected);
+        assert.equal(actual.headers.ages_user_token, "human-token");
+        assert.equal(actual.headers["x-ages-api-key"], "caller-key");
+        assert.equal(actual.headers["x-broker-service-api-key"], undefined);
+        assert.equal(actual.headers.cookie, "other=keep; ASP.NET_SessionId=upstream-session");
+        assert.deepEqual(actual.body, body);
+        assert.match(actual.url, /probe\.ages\?value=1$/);
+      }
+      const login = await request(`${proxy}${prefix}${kind === "mini" ? "/~mini~" : ""}/login/autorizar`, "POST",
+        { AGES_TOKEN: "discard-on-login", AGES_USER: "synthetic-user", AGES_PASS: "synthetic-password" });
+      assert.equal(login.status, 200);
+      assert.equal(seen.at(-1).headers.ages_token, undefined);
+      assert.equal(seen.at(-1).headers.ages_user, "synthetic-user");
+      assert.equal(seen.at(-1).headers.ages_pass, "synthetic-password");
+    });
+  }
+}

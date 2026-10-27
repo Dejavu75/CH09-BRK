@@ -6,15 +6,6 @@ import { verifyMs07BeatBearer } from "./interms";
 
 export const SERVICE_KEY_HEADER = "x-broker-service-api-key";
 
-export const requireSecureTransport: RequestHandler = (req, res, next) => {
-  if (req.secure) {
-    next();
-    return;
-  }
-  // Do not redirect: a redirect could forward credentials or service keys.
-  res.status(403).set("Cache-Control", "no-store").json({ error: "HTTPS required" });
-};
-
 function safeNext(value: unknown): string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") &&
     !/[\\\r\n]/.test(value) ? value : "/foreign/broker/pool/show";

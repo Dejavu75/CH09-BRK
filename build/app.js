@@ -51,6 +51,7 @@ const trusted_proxy_1 = require("./auth/trusted_proxy");
 const rou_broker_1 = require("./routes/rou_broker");
 const ages_pool_1 = require("./services/ages_pool");
 const heartbeat_metadata_1 = require("./services/heartbeat_metadata");
+const tls_reloader_1 = require("./services/tls_reloader");
 const logger_1 = require("./utils/logger");
 (0, heartbeat_metadata_1.configureHeartbeatExtraData)();
 const doorMan = se_configbase_1.DoormanController.getInstance();
@@ -64,7 +65,6 @@ app.use("/.well-known/acme-challenge", express_1.default.static(`${certbotWebroo
     dotfiles: "allow",
     fallthrough: false
 }));
-app.use(http_2.requireSecureTransport);
 const sslConfig = getSslConfig();
 const authDatabaseFile = requiredEnvironment("BROKER_AUTH_DB_PATH");
 const auth = new auth_service_1.BrokerAuthService({
@@ -106,10 +106,19 @@ httpServer.listen(config.port, () => {
     });
 });
 if (sslConfig.ready) {
-    const httpsServer = https_1.default.createServer({
+    const tlsCredentials = {
         cert: (0, fs_1.readFileSync)(sslConfig.certPath),
         key: (0, fs_1.readFileSync)(sslConfig.keyPath)
-    }, app);
+    };
+    const httpsServer = https_1.default.createServer(tlsCredentials, app);
+    const stopTlsReload = (0, tls_reloader_1.startTlsCertificateReload)(httpsServer, {
+        certPath: sslConfig.certPath,
+        keyPath: sslConfig.keyPath,
+        initialCredentials: tlsCredentials,
+        onReload: logger_1.log,
+        onError: logger_1.warn
+    });
+    httpsServer.once("close", stopTlsReload);
     httpsServer.listen(sslConfig.port, () => {
         (0, logger_1.log)(`CH09-BRK HTTPS Server running on port ${sslConfig.port} | cert=${sslConfig.certPath}`);
     });

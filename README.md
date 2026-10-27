@@ -60,14 +60,13 @@ ges01 que NAGES sea alcanzable por HTTPS; si NAGES no responde, el latido falla
 cerrado. Antes de activar, verificá también que AGES conserve su autenticación
 y que los controles del Broker sigan rechazando clientes no autorizados.
 
-El challenge ACME es la única excepción HTTP. Login, sesión, páginas, controles
-de máquina y proxy AGES responden 403 por HTTP, sin redirección que pueda reenviar
-credenciales. Si producción publica solamente el puerto HTTP del contenedor,
-debe existir un terminador TLS confiable delante del Broker y su IP exacta
-debe estar en `BROKER_TRUSTED_PROXY_IPS`; ese proxy debe sobrescribir
-`X-Forwarded-Proto` con `https` únicamente para conexiones TLS y bloquear
-el acceso directo de clientes al puerto interno. Sin TLS directo o ese proxy
-configurado, la instalación falla cerrada para todas las rutas protegidas.
+El Broker acepta tráfico HTTP y HTTPS y no redirige ni rechaza una petición sólo
+por su transporte. Las rutas mantienen sus compuertas propias: AGES decide la
+autorización del proxy, los controles de máquina exigen su credencial y las
+rutas humanas exigen sesión. Para acceso humano con cookies seguras se recomienda
+TLS directo o un terminador TLS confiable; en modo proxy, su IP exacta debe estar
+en `BROKER_TRUSTED_PROXY_IPS` y debe sobrescribir `X-Forwarded-Proto` según el
+transporte real.
 
 `/auth/login` ofrece el acceso humano. Las páginas de pool, timings y
 administración requieren sesión de navegador. Las rutas de proxy AGES bajo
@@ -130,6 +129,18 @@ no deben invocarse para esta migración.
 - Postman: `postman/CH09-BRK.postman_collection.json`
 - Config local: `default.env`
 - Rutas principales: `src/routes/rou_broker.ts`
+
+## Alias de centros de costos
+
+Las rutas REST `tablas/centros_costos/centros` y
+`tablas/centros_costos/subcentros`, bajo `/ages` o `/foreign/broker`,
+apuntan a `otablas.oCentros.centros` y `otablas.oCentros.subcentros`.
+El alias funciona con BigBoy y con el selector `~mini~`. No cambia la ruta
+existente `tablas/centros/centros`, los prefijos de otros objetos ni los métodos
+con guiones bajos. `oCentrosCostos` no es el objeto registrado en AVFP.
+
+Esta correspondencia se verificó contra las fuentes AVFP locales el 2026-10-15;
+no acredita la versión de una DLL desplegada ni reemplaza una prueba runtime.
 
 ## Verificación operativa
 
@@ -218,3 +229,12 @@ La aplicación hija `/AGES/log` no se clona porque las rutas del broker no depen
 - Inventario global: `../../ECOSISTEMA_APIS_NODE_POSTMAN.md`
 - Hosts y rutas: `../../ECOSISTEMA_ELEMENTOS_CONFIGURACION.md`
 - Índice de contratos: `../../docs/service-contract-index.md`
+
+
+## Token técnico del cliente en el proxy
+
+El proxy externo conserva únicamente el `AGES_TOKEN` aportado por el cliente; si falta, no agrega el del slot. En login lo omite, aunque el cliente lo envíe. Esto no reemplaza `AGES_USER_TOKEN` ni la API key del cliente. Warmup, ping directo y solicitudes internas siguen usando el token técnico del slot; el beat Mini retransmitido por el proxy sigue la política externa.
+
+La cookie `ASP.NET_SessionId` continúa ligada al slot. La captura de tokens y cookies de respuesta tampoco cambia: estas pruebas no demuestran aislamiento de identidad ni aceptación con DLL AGES reales. La normalización de headers duplicados conserva el comportamiento de `Headers`, sin agregar validación nueva.
+
+Pruebas locales: `node --test Tests/token_forwarding.test.js Tests/proxy_request_body.test.js Tests/dual_backend_routing.test.js Tests/incremental_warmup.test.js`. Usá un entorno de pruebas sin configuración operativa; los upstreams de estas pruebas son simulados o efímeros en loopback. La suite completa y TypeScript siguen siendo comprobaciones separadas.

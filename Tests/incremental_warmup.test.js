@@ -75,7 +75,7 @@ for (const config of [legacy, dual]) {
           assert.equal(result.status, 200);
           const request = requests.at(-1);
           const host = new URL(request.url).hostname;
-          assert.equal(request.headers.get("AGES_TOKEN"), `token-${host}`);
+          assert.equal(request.headers.get("AGES_TOKEN"), null);
           assert.equal(request.headers.get("cookie"), `ASP.NET_SessionId=session-${host}`);
           const callsBeforePing = requests.length;
           await pool.runPingSweep();
