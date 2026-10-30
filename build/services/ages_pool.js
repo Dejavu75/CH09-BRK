@@ -63,6 +63,8 @@ class AgesConnectionPool {
         this.nextSlotIndex = 0;
         this.pingSweepRunning = false;
         this.agesHostRestartRunning = false;
+        this.legacyMaintenanceRecoveryScheduled = false;
+        this.legacyMaintenanceRecoveryRunning = false;
         this.agesHostRestartCooldownUntil = 0;
         this.initialWarmupFinished = false;
         this.liveTimings = new Map();
@@ -86,6 +88,13 @@ class AgesConnectionPool {
     }
     warmUp() {
         return __awaiter(this, arguments, void 0, function* (reason = "warmup requested") {
+            if (this.legacyMaintenanceRecoveryRunning)
+                throw new Error("Cannot warm up during legacy maintenance recovery");
+            return this.startWarmUp(reason);
+        });
+    }
+    startWarmUp(reason) {
+        return __awaiter(this, void 0, void 0, function* () {
             if (this.lifecycle)
                 throw new Error(`Cannot warm up while backend ${this.lifecycle.id} is recycling`);
             if (this.warmupPromise) {
@@ -492,7 +501,45 @@ class AgesConnectionPool {
                 }
             }
             this.logSlotError(slot);
+            if (slot.lastStatusCode === 503)
+                this.scheduleLegacyMaintenanceRecovery();
             return slot.status;
+        });
+    }
+    scheduleLegacyMaintenanceRecovery() {
+        if (this.backendConfiguration.mode !== "legacy" || this.legacyMaintenanceRecoveryScheduled)
+            return;
+        this.legacyMaintenanceRecoveryScheduled = true;
+        // Liberar primero el contador de mantenimiento y el warmup que originaron el 503.
+        setImmediate(() => {
+            void this.recoverLegacyMaintenance().catch((error) => {
+                (0, logger_1.warn)(`ages maintenance recovery fail | err=${safeErrorName(error)}`);
+            }).finally(() => { this.legacyMaintenanceRecoveryScheduled = false; });
+        });
+    }
+    recoverLegacyMaintenance() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.warmupPromise)
+                yield this.warmupPromise;
+            if (!this.slots.some((slot) => slot.status === "error" && slot.lastStatusCode === 503))
+                return;
+            const backend = this.backendStates.get("legacy");
+            const previousState = backend.state;
+            this.legacyMaintenanceRecoveryRunning = true;
+            backend.state = "draining";
+            let restarted = false;
+            try {
+                yield this.waitForDrain(this.slots, "legacy maintenance recovery");
+                restarted = yield this.restartAgesHost("ages_503_maintenance");
+            }
+            finally {
+                this.legacyMaintenanceRecoveryRunning = false;
+                if (!restarted) {
+                    backend.state = previousState;
+                    this.notifySlotWaiters("mini");
+                    this.notifySlotWaiters("bigb");
+                }
+            }
         });
     }
     runPingSweep() {
@@ -1384,7 +1431,7 @@ class AgesConnectionPool {
                 ]);
                 (0, logger_1.log)(`ages restart ok | host=${AGES_SSH_HOST} | reason=${reason}`);
                 this.pushTimingEvent(`IIS restart ok: ${reason}`);
-                void this.warmUp(`host restart ${reason}`);
+                void this.startWarmUp(`host restart ${reason}`);
                 return true;
             }
             catch (error) {

@@ -210,6 +210,15 @@ no protegen contra un supervisor externo que reinicie el proceso repetidamente.
 Los reciclados manuales conservan su requisito de peer sano y no eluden el drenaje.
 El rescate no repite operaciones de negocio ni modifica sus respuestas HTTP.
 
+En modo legacy, un 503 persistente de inicialización o mantenimiento también
+programa la recuperación sin esperar solicitudes externas. Se espera el warmup y
+se drenan las operaciones activas antes del reinicio de IIS existente, con su
+cooldown y exclusión de reinicios simultáneos. Si se rechaza o falla el reinicio,
+se restaura el estado anterior y se despiertan las solicitudes en espera. Los 500
+legacy conservan su comportamiento previo; esta ruta no se ejecuta en modo dual.
+Durante el drenaje/reinicio automático se rechaza un warmup público concurrente;
+el warmup interno del reinicio conserva su ejecución para restablecer el servicio.
+
 ### Identidad SSH del broker
 
 La imagen no genera ni contiene claves SSH. La identidad se crea una sola vez en el

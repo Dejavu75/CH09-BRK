@@ -1,6 +1,6 @@
 # Recuperación dual de último recurso y consolidación
 Objetivo: recuperar AppPools secuencialmente ante caída dual persistente, sin reiniciar IIS global ni perder trabajo pendiente.
-Rama: `feat/dual-last-resort-20261030`, base `79e7adc`; entrega local `ask-on-risk`, previsión 380 líneas; pruebas: TypeScript y Node test.
+Rama: `feat/dual-last-resort-20261030`, base `79e7adc`; entrega `auto-chain`, estrategia `stacked-to-main` sólo local, unidades separadas; pruebas: TypeScript y Node test.
 
 ## Specs
 
@@ -10,9 +10,10 @@ Rama: `feat/dual-last-resort-20261030`, base `79e7adc`; entrega local `ask-on-ri
 
 ## Tasks
 
-- T1 — S1–S2 — inline (una unidad de comportamiento, sin motivo de escritor delegado) — implementada; RED 5 fallos/11, GREEN focal 33/33, TypeScript OK; commit por registrar. Risk: items 4 y 5 (serialización de recuperación y reinicio de AppPools).
+- T1 — S1–S2 — inline (una unidad de comportamiento, sin motivo de escritor delegado) — completada en `31b9015e31041fc68d0515fd153184ffead7f9fd`; RED 5 fallos/11, GREEN focal 33/33, regresiones finales 15/15, TypeScript OK. Risk: items 4 y 5 (serialización de recuperación y reinicio de AppPools).
 - T2 — S1–S2 — verificador independiente (items 4 y 5) — aprobada; suite 157 PASS, 0 FAIL, 1 SKIP; diferencial público idéntico salvo flujo solicitado, compilación OK, dos probes adicionales aprobados y conservados como regresiones.
-- T3 — S3 — inline, auditoría coordinada — en curso; commit e integración pendientes de evidencia y decisiones abiertas.
+- T3 — S3 — inline, auditoría coordinada — parcial: `main` local contiene `31b9015`; sin push ni despliegue. Cambios antiguos incompatibles preservados, no integrados; no se sustituye la fuente de autenticación sin decisión expresa.
+- T4 — S3 — inline, rescate de la unidad legacy 503 pendiente — implementada y verificada; entrega separada autorizada, commit por registrar. RED 3 fallos/4, GREEN focal 41/41; suite final 165 PASS, 0 FAIL, 1 SKIP. Risk: items 4 y 5 (drenaje y reinicio legacy).
 
 ## Log
 
@@ -22,3 +23,10 @@ Rama: `feat/dual-last-resort-20261030`, base `79e7adc`; entrega local `ask-on-ri
 - L4 — Se creó worktree mediante Git porque la herramienta de la aplicación rechazó sourceRoot fuera de las carpetas del chat. Se preservó intacto el árbol principal sucio. RDD estaba desactivado en el clon; se respetará.
 - L5 — Verificación independiente en scratch: TypeScript y suite completa 157 PASS, 0 FAIL, 1 SKIP (permisos POSIX no verificables en Windows). Diferencial base/candidato de flujos públicos sano, 503 con peer sano, manual y legacy idéntico; dato centinela sin cambios ante rechazo. Spot check del padre: dos probes adicionales 2/2 PASS; incorporados como regresiones.
 - L6 — Corrección de auditoría del chat original: HTTP sin guard de transporte ya estaba integrado en 79e7adc por cb98a0e; no corresponde tratarlo como retiro pendiente ni restaurarlo. Filtros, dual 500/503 y límite 100 MB ya están integrados. El árbol viejo de auth revierte funciones actuales; centros WIP contradice alias de main. No se mezclan. Pendiente evaluable: recuperación legacy 503 sin commit.
+- L7 — `main` local avanzado por fast-forward/CAS de 6924d9c a 31b9015; origen cacheado conservado en 79e7adc, sin consultar ni modificar remoto. Árbol principal y demás worktrees intactos. Unidad T1: 282 líneas autorales, generado excluido; RDD desactivado/no administrado.
+- L8 — El rescate legacy se mantiene como segunda unidad revisable. Su previsión eleva la consolidación a más de 400 líneas autorales: antes del siguiente commit se debe resolver la estrategia de entrega `ask-on-risk`; no se publicará ninguna PR sin autorización.
+- L9 — Verificador legacy detectó una carrera: warmup público reabría el backend mientras el reinicio automático estaba pendiente. Corrección batch 1: exclusión del warmup público con flag de recuperación y helper privado para el warmup interno del reinicio. Reproducción conservada en pruebas. Recheck focal independiente y spot check del padre 1/1 PASS; suite final 165 PASS, 0 FAIL, 1 SKIP Windows. Compilación y equivalencia JS/TS aprobadas.
+- L10 — Presupuesto de T1: 282 líneas autorales. T4 antes de este cierre: aproximadamente 240 líneas autorales; acumulado supera 400. Falta elegir entre unidades encadenadas a main o rama integradora antes del siguiente commit. El código legacy y sus pruebas quedan preparados sin modificar el WIP de origen. No se presenta como integrado en main ni desplegado.
+- L11 — La cadena antigua de auth no es una simple rama faltante: sustituye las cuentas propias por htpasswd de BackGES y exige service key en entorno; son decisiones distintas, no requisitos de esta recuperación. Se conservan credenciales y configuración actuales de main, sin leer ni copiar secretos.
+- L12 — 2026-10-30 — "Integrá las unidades por separado a main, como recomendás, y coordiná con el otro agente para cerrar lo pendiente. Sin publicar ni desplegar todavía."
+- L13 — Estrategia confirmada: unidades separadas hacia main (`stacked-to-main`), sin PR, push, publicación ni despliegue. Unidad 1: `79e7adc..31b9015` (rescate dual). Unidad 2: `31b9015..commit legacy` (mantenimiento legacy 503). Antes del commit se comprobó que fuente, build, README y ambas pruebas legacy coinciden con el candidato aprobado, normalizando sólo CRLF/LF; no se repite el barrido independiente ya aprobado.

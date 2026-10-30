@@ -193,6 +193,8 @@ export class AgesConnectionPool {
   private adaptiveSweep?: NodeJS.Timeout;
   private pingSweepRunning = false;
   private agesHostRestartRunning = false;
+  private legacyMaintenanceRecoveryScheduled = false;
+  private legacyMaintenanceRecoveryRunning = false;
   private agesHostRestartCooldownUntil = 0;
   private lastAgesHostRestartStartedAt?: string;
   private lastAgesHostRestartFinishedAt?: string;
@@ -226,6 +228,11 @@ export class AgesConnectionPool {
   }
 
   async warmUp(reason = "warmup requested"): Promise<AgesPoolSummary> {
+    if (this.legacyMaintenanceRecoveryRunning) throw new Error("Cannot warm up during legacy maintenance recovery");
+    return this.startWarmUp(reason);
+  }
+
+  private async startWarmUp(reason: string): Promise<AgesPoolSummary> {
     if (this.lifecycle) throw new Error(`Cannot warm up while backend ${this.lifecycle.id} is recycling`);
     if (this.warmupPromise) {
       return this.warmupPromise;
@@ -680,7 +687,40 @@ export class AgesConnectionPool {
     }
 
     this.logSlotError(slot);
+    if (slot.lastStatusCode === 503) this.scheduleLegacyMaintenanceRecovery();
     return slot.status;
+  }
+
+  private scheduleLegacyMaintenanceRecovery(): void {
+    if (this.backendConfiguration.mode !== "legacy" || this.legacyMaintenanceRecoveryScheduled) return;
+    this.legacyMaintenanceRecoveryScheduled = true;
+    // Liberar primero el contador de mantenimiento y el warmup que originaron el 503.
+    setImmediate(() => {
+      void this.recoverLegacyMaintenance().catch((error) => {
+        warn(`ages maintenance recovery fail | err=${safeErrorName(error)}`);
+      }).finally(() => { this.legacyMaintenanceRecoveryScheduled = false; });
+    });
+  }
+
+  private async recoverLegacyMaintenance(): Promise<void> {
+    if (this.warmupPromise) await this.warmupPromise;
+    if (!this.slots.some((slot) => slot.status === "error" && slot.lastStatusCode === 503)) return;
+    const backend = this.backendStates.get("legacy")!;
+    const previousState = backend.state;
+    this.legacyMaintenanceRecoveryRunning = true;
+    backend.state = "draining";
+    let restarted = false;
+    try {
+      await this.waitForDrain(this.slots, "legacy maintenance recovery");
+      restarted = await this.restartAgesHost("ages_503_maintenance");
+    } finally {
+      this.legacyMaintenanceRecoveryRunning = false;
+      if (!restarted) {
+        backend.state = previousState;
+        this.notifySlotWaiters("mini");
+        this.notifySlotWaiters("bigb");
+      }
+    }
   }
 
   private async runPingSweep(): Promise<void> {
@@ -1738,7 +1778,7 @@ export class AgesConnectionPool {
       ]);
       log(`ages restart ok | host=${AGES_SSH_HOST} | reason=${reason}`);
       this.pushTimingEvent(`IIS restart ok: ${reason}`);
-      void this.warmUp(`host restart ${reason}`);
+      void this.startWarmUp(`host restart ${reason}`);
       return true;
     } catch (error) {
       warn(`ages restart fail | host=${AGES_SSH_HOST} | reason=${reason} | err=${safeErrorName(error)}`);
