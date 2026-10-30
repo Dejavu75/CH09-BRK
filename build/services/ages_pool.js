@@ -45,16 +45,20 @@ const AGES_SSH_KEY_PATH = (_d = process.env.AGES_SSH_KEY_PATH) !== null && _d !=
 const AGES_SSH_RESTART_COMMAND = (_e = process.env.AGES_SSH_RESTART_COMMAND) !== null && _e !== void 0 ? _e : "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
 const AGES_SSH_COMMAND_TIMEOUT_MS = getEnvDurationSeconds("AGES_SSH_COMMAND_TIMEOUT_SECONDS", 30) * 1000;
+const DUAL_RECOVERY_MAX_ATTEMPTS = 2;
+const DUAL_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 const initialEndpoints = createInitialEndpoints();
 class AgesConnectionPool {
     constructor(baseUrl = AGES_BASE_URL, endpoints = initialEndpoints, backendConfiguration = resolveBackendConfiguration(process.env, baseUrl), options = {}) {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e;
         this.baseUrl = baseUrl;
         this.slots = [];
         this.backendStates = new Map();
         this.failedSlotRecycles = new Map();
         this.scheduledBackendRecycles = new Set();
+        this.dualRecoveryAttempts = 0;
+        this.dualRecoveryCooldownUntil = 0;
         this.nextSlotId = 1;
         this.nextSlotIndex = 0;
         this.pingSweepRunning = false;
@@ -77,6 +81,7 @@ class AgesConnectionPool {
         this.drainTimeoutMs = (_b = options.drainTimeoutMs) !== null && _b !== void 0 ? _b : getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
         this.pollMs = (_c = options.pollMs) !== null && _c !== void 0 ? _c : 250;
         this.recycleExecutor = (_d = options.recycleExecutor) !== null && _d !== void 0 ? _d : ((id) => this.recycleBackendAppPool(id));
+        this.recoveryNow = (_e = options.recoveryNow) !== null && _e !== void 0 ? _e : Date.now;
         endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
     }
     warmUp() {
@@ -257,7 +262,6 @@ class AgesConnectionPool {
     }
     drainAndRecycleBackend(reference) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a;
             if (this.backendConfiguration.mode !== "dual")
                 throw new Error("Directed recycle requires dual mode");
             const id = reference.trim().toUpperCase();
@@ -272,11 +276,7 @@ class AgesConnectionPool {
                 throw new Error(`Backend ${this.lifecycle.id} is already recycling`);
             }
             const peer = this.backendConfiguration.backends.find((item) => item.id !== id);
-            const peerSlots = this.slots.filter((slot) => slot.backendId === peer.id);
-            const requiredKinds = new Set(this.slots.map((slot) => slot.kind));
-            if (((_a = this.backendStates.get(peer.id)) === null || _a === void 0 ? void 0 : _a.state) !== "active" ||
-                peerSlots.some((slot) => slot.status !== "ready") ||
-                [...requiredKinds].some((kind) => !peerSlots.some((slot) => slot.kind === kind && slot.status === "ready"))) {
+            if (!this.hasReadyPeer(id)) {
                 throw new Error(`Peer backend ${peer.id} is not active and ready`);
             }
             const promise = this.runDirectedRecycle(id, backend).finally(() => { this.lifecycle = undefined; });
@@ -368,7 +368,7 @@ class AgesConnectionPool {
                     }
                     if (response.status === 503) {
                         if (this.backendConfiguration.mode === "dual") {
-                            void this.drainAndRecycleBackend(slot.backendId).catch((error) => (0, logger_1.warn)(`backend recycle fail | err=${safeErrorName(error)}`));
+                            void this.recoverBackendAutomatically(slot.backendId).catch((error) => (0, logger_1.warn)(`backend recycle fail | err=${safeErrorName(error)}`));
                         }
                         else {
                             yield this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
@@ -621,12 +621,58 @@ class AgesConnectionPool {
                     yield this.warmupPromise;
                 if (((_b = (_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) < 2 || this.lifecycle)
                     return;
-                yield this.drainAndRecycleBackend(id);
+                yield this.recoverBackendAutomatically(id);
             }))().catch((error) => {
                 (0, logger_1.warn)(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
             }).finally(() => {
                 this.scheduledBackendRecycles.delete(id);
             });
+        });
+    }
+    hasReadyPeer(id) {
+        var _a;
+        const peer = this.backendConfiguration.backends.find((backend) => backend.id !== id);
+        const peerSlots = this.slots.filter((slot) => slot.backendId === peer.id);
+        const requiredKinds = new Set(this.slots.map((slot) => slot.kind));
+        return ((_a = this.backendStates.get(peer.id)) === null || _a === void 0 ? void 0 : _a.state) === "active" &&
+            peerSlots.every((slot) => slot.status === "ready") &&
+            [...requiredKinds].every((kind) => peerSlots.some((slot) => slot.kind === kind && slot.status === "ready"));
+    }
+    recoverBackendAutomatically(id) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.warmupPromise || this.lifecycle)
+                return this.getSummary();
+            const backends = this.backendConfiguration.backends;
+            const dualFailure = this.backendConfiguration.mode === "dual" && backends.every((backend) => {
+                var _a, _b;
+                return ((_b = (_a = this.failedSlotRecycles.get(backend.id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) >= 2 &&
+                    this.slots.some((slot) => slot.backendId === backend.id && slot.status === "error");
+            });
+            if (!dualFailure && this.dualRecoveryAttempts === 0)
+                return this.drainAndRecycleBackend(id);
+            // Tras un rescate, también los reintentos parciales comparten el mismo presupuesto.
+            if (this.dualRecoveryAttempts >= DUAL_RECOVERY_MAX_ATTEMPTS ||
+                this.recoveryNow() < this.dualRecoveryCooldownUntil) {
+                (0, logger_1.warn)(`dual recovery skip | attempts=${this.dualRecoveryAttempts} | cooldownUntil=${this.dualRecoveryCooldownUntil}`);
+                return this.getSummary();
+            }
+            const targets = dualFailure ? ["A", "B"] : [id];
+            if (!dualFailure && !this.hasReadyPeer(id))
+                return this.getSummary();
+            this.dualRecoveryAttempts++;
+            (0, logger_1.log)(`dual recovery start | attempt=${this.dualRecoveryAttempts} | backends=${targets.join(",")}`);
+            const promise = (() => __awaiter(this, void 0, void 0, function* () {
+                for (const target of targets) {
+                    yield this.runDirectedRecycle(target, this.backendStates.get(target));
+                }
+                return this.getSummary();
+            }))().finally(() => {
+                this.dualRecoveryCooldownUntil = this.recoveryNow() + DUAL_RECOVERY_COOLDOWN_MS;
+                this.lifecycle = undefined;
+                (0, logger_1.log)(`dual recovery finish | attempt=${this.dualRecoveryAttempts} | cooldownUntil=${this.dualRecoveryCooldownUntil}`);
+            });
+            this.lifecycle = { id: targets[0], promise };
+            return promise;
         });
     }
     fetchWarmup(slot) {

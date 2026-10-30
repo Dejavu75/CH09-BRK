@@ -33,6 +33,8 @@ const AGES_SSH_RESTART_COMMAND =
   process.env.AGES_SSH_RESTART_COMMAND ?? "powershell -NoProfile -ExecutionPolicy Bypass -Command \"iisreset /restart\"";
 const AGES_IIS_RESTART_COOLDOWN_MS = getEnvDurationSeconds("AGES_IIS_RESTART_COOLDOWN_SECONDS", 300) * 1000;
 const AGES_SSH_COMMAND_TIMEOUT_MS = getEnvDurationSeconds("AGES_SSH_COMMAND_TIMEOUT_SECONDS", 30) * 1000;
+const DUAL_RECOVERY_MAX_ATTEMPTS = 2;
+const DUAL_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 const execFileAsync = promisify(execFile);
 
 type AgesPoolSlotStatus = "idle" | "warming" | "starting" | "ready" | "error";
@@ -178,6 +180,9 @@ export class AgesConnectionPool {
   private lifecycle?: { id: AgesBackendId; promise: Promise<AgesPoolSummary> };
   private readonly failedSlotRecycles = new Map<AgesBackendId, Set<number>>();
   private readonly scheduledBackendRecycles = new Set<AgesBackendId>();
+  private dualRecoveryAttempts = 0;
+  private dualRecoveryCooldownUntil = 0;
+  private readonly recoveryNow: () => number;
   private readonly drainTimeoutMs: number;
   private readonly pollMs: number;
   private readonly recycleExecutor: (id: AgesBackendId) => Promise<void>;
@@ -204,7 +209,7 @@ export class AgesConnectionPool {
     private readonly baseUrl: string = AGES_BASE_URL,
     endpoints: AgesPoolEndpoint[] = initialEndpoints,
     backendConfiguration: AgesBackendConfiguration = resolveBackendConfiguration(process.env, baseUrl),
-    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void>; timingStorePath?: string } = {}
+    options: { drainTimeoutMs?: number; pollMs?: number; recycleExecutor?: (id: AgesBackendId) => Promise<void>; timingStorePath?: string; recoveryNow?: () => number } = {}
   ) {
     const timingStorePath = options.timingStorePath ?? process.env.BROKER_TIMINGS_DB_PATH;
     if (!timingStorePath && process.env.NODE_ENV === "production") {
@@ -216,6 +221,7 @@ export class AgesConnectionPool {
     this.drainTimeoutMs = options.drainTimeoutMs ?? getEnvDurationSeconds("AGES_BACKEND_DRAIN_TIMEOUT_SECONDS", 120) * 1000;
     this.pollMs = options.pollMs ?? 250;
     this.recycleExecutor = options.recycleExecutor ?? ((id) => this.recycleBackendAppPool(id));
+    this.recoveryNow = options.recoveryNow ?? Date.now;
     endpoints.forEach((item) => this.slots.push(this.createSlot(item.kind, false)));
   }
 
@@ -427,11 +433,7 @@ export class AgesConnectionPool {
       throw new Error(`Backend ${this.lifecycle.id} is already recycling`);
     }
     const peer = this.backendConfiguration.backends.find((item) => item.id !== id)!;
-    const peerSlots = this.slots.filter((slot) => slot.backendId === peer.id);
-    const requiredKinds = new Set(this.slots.map((slot) => slot.kind));
-    if (this.backendStates.get(peer.id)?.state !== "active" ||
-        peerSlots.some((slot) => slot.status !== "ready") ||
-        [...requiredKinds].some((kind) => !peerSlots.some((slot) => slot.kind === kind && slot.status === "ready"))) {
+    if (!this.hasReadyPeer(id)) {
       throw new Error(`Peer backend ${peer.id} is not active and ready`);
     }
     const promise = this.runDirectedRecycle(id, backend).finally(() => { this.lifecycle = undefined; });
@@ -539,7 +541,7 @@ export class AgesConnectionPool {
 
         if (response.status === 503) {
           if (this.backendConfiguration.mode === "dual") {
-            void this.drainAndRecycleBackend(slot.backendId).catch((error) => warn(`backend recycle fail | err=${safeErrorName(error)}`));
+            void this.recoverBackendAutomatically(slot.backendId).catch((error) => warn(`backend recycle fail | err=${safeErrorName(error)}`));
           } else {
             await this.restartAgesHost(this.isDllInitError(response.status, body) ? "dll_init_error" : "ages_503");
           }
@@ -815,13 +817,55 @@ export class AgesConnectionPool {
       void (async () => {
         if (this.warmupPromise) await this.warmupPromise;
         if ((this.failedSlotRecycles.get(id)?.size ?? 0) < 2 || this.lifecycle) return;
-        await this.drainAndRecycleBackend(id);
+        await this.recoverBackendAutomatically(id);
       })().catch((error) => {
         warn(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
       }).finally(() => {
         this.scheduledBackendRecycles.delete(id);
       });
     });
+  }
+
+  private hasReadyPeer(id: AgesBackendId): boolean {
+    const peer = this.backendConfiguration.backends.find((backend) => backend.id !== id)!;
+    const peerSlots = this.slots.filter((slot) => slot.backendId === peer.id);
+    const requiredKinds = new Set(this.slots.map((slot) => slot.kind));
+    return this.backendStates.get(peer.id)?.state === "active" &&
+      peerSlots.every((slot) => slot.status === "ready") &&
+      [...requiredKinds].every((kind) => peerSlots.some((slot) => slot.kind === kind && slot.status === "ready"));
+  }
+
+  private async recoverBackendAutomatically(id: AgesBackendId): Promise<AgesPoolSummary> {
+    if (this.warmupPromise || this.lifecycle) return this.getSummary();
+    const backends = this.backendConfiguration.backends;
+    const dualFailure = this.backendConfiguration.mode === "dual" && backends.every((backend) =>
+      (this.failedSlotRecycles.get(backend.id)?.size ?? 0) >= 2 &&
+      this.slots.some((slot) => slot.backendId === backend.id && slot.status === "error")
+    );
+    if (!dualFailure && this.dualRecoveryAttempts === 0) return this.drainAndRecycleBackend(id);
+
+    // Tras un rescate, también los reintentos parciales comparten el mismo presupuesto.
+    if (this.dualRecoveryAttempts >= DUAL_RECOVERY_MAX_ATTEMPTS ||
+        this.recoveryNow() < this.dualRecoveryCooldownUntil) {
+      warn(`dual recovery skip | attempts=${this.dualRecoveryAttempts} | cooldownUntil=${this.dualRecoveryCooldownUntil}`);
+      return this.getSummary();
+    }
+    const targets = dualFailure ? ["A", "B"] as AgesBackendId[] : [id];
+    if (!dualFailure && !this.hasReadyPeer(id)) return this.getSummary();
+    this.dualRecoveryAttempts++;
+    log(`dual recovery start | attempt=${this.dualRecoveryAttempts} | backends=${targets.join(",")}`);
+    const promise = (async () => {
+      for (const target of targets) {
+        await this.runDirectedRecycle(target, this.backendStates.get(target)!);
+      }
+      return this.getSummary();
+    })().finally(() => {
+      this.dualRecoveryCooldownUntil = this.recoveryNow() + DUAL_RECOVERY_COOLDOWN_MS;
+      this.lifecycle = undefined;
+      log(`dual recovery finish | attempt=${this.dualRecoveryAttempts} | cooldownUntil=${this.dualRecoveryCooldownUntil}`);
+    });
+    this.lifecycle = { id: targets[0], promise };
+    return promise;
   }
 
   private async fetchWarmup(slot: AgesPoolSlot): Promise<Response> {

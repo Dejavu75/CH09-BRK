@@ -193,8 +193,22 @@ por `AGES_IIS_APP_POOL_A/B`. El nombre acepta sólo letras, números, `_`, `-` y
 no se aceptan comandos configurables. Ajustar el drenaje y SSH con
 `AGES_BACKEND_DRAIN_TIMEOUT_SECONDS` y `AGES_SSH_COMMAND_TIMEOUT_SECONDS`.
 
-El reciclado automático dual se limita a respuestas HTTP 503 correlacionadas con un
-slot. Detectar automáticamente el HTTP 500 del error COM queda como seguimiento.
+El reciclado automático dual atiende los HTTP 503 de solicitudes y los HTTP 500/503
+persistentes de mantenimiento o warmup, con dos slots distintos del mismo backend.
+Si ambos backends cumplen ese umbral, el rescate de último recurso drena y recicla
+primero A, espera su warmup completo y recién entonces drena y recupera B.
+Si A falla o vence su drenaje, no toca B; nunca ejecuta un reinicio global de IIS.
+
+El rescate permite como máximo dos ciclos automáticos por proceso, con cinco
+minutos de pausa desde la finalización de cada intento, incluso si falla. Una vez
+iniciado el primer rescate, los reintentos automáticos de un solo backend comparten
+ese presupuesto y esa pausa; los éxitos y warmups manuales no los restablecen.
+El mantenimiento continúa comprobando las conexiones sin forzar nuevos AppPools
+durante la pausa o tras agotar el límite. Se registran inicio, finalización y
+bloqueos en el log. Los límites están en memoria: reiniciar el broker los restablece;
+no protegen contra un supervisor externo que reinicie el proceso repetidamente.
+Los reciclados manuales conservan su requisito de peer sano y no eluden el drenaje.
+El rescate no repite operaciones de negocio ni modifica sus respuestas HTTP.
 
 ### Identidad SSH del broker
 
