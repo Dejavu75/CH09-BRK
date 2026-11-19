@@ -274,7 +274,15 @@ export class AgesConnectionPool {
       ].join(" | ")
     );
 
-    for (const slot of warmupSlots) {
+    const miniSlots = warmupSlots.filter((slot) => slot.kind === "mini");
+    const bigBoySlots = warmupSlots.filter((slot) => slot.kind === "bigb");
+    const initializationOrder: AgesPoolSlot[] = [];
+    for (let index = 0; index < Math.max(miniSlots.length, bigBoySlots.length); index++) {
+      if (miniSlots[index]) initializationOrder.push(miniSlots[index]);
+      if (bigBoySlots[index]) initializationOrder.push(bigBoySlots[index]);
+    }
+
+    for (const slot of initializationOrder) {
       await this.initializeSlot(slot);
 
       if (slot.status === "starting") {

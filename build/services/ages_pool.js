@@ -132,7 +132,16 @@ class AgesConnectionPool {
                 `proto=${getProtocolFromUrl(this.baseUrl) || "unknown"}`,
                 `ssh=${AGES_SSH_HOST || "unset"}`
             ].join(" | "));
-            for (const slot of warmupSlots) {
+            const miniSlots = warmupSlots.filter((slot) => slot.kind === "mini");
+            const bigBoySlots = warmupSlots.filter((slot) => slot.kind === "bigb");
+            const initializationOrder = [];
+            for (let index = 0; index < Math.max(miniSlots.length, bigBoySlots.length); index++) {
+                if (miniSlots[index])
+                    initializationOrder.push(miniSlots[index]);
+                if (bigBoySlots[index])
+                    initializationOrder.push(bigBoySlots[index]);
+            }
+            for (const slot of initializationOrder) {
                 yield this.initializeSlot(slot);
                 if (slot.status === "starting") {
                     (0, logger_1.log)(`warmup slot starting | ${this.formatSlot(slot)}`);

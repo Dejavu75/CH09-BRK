@@ -41,15 +41,19 @@ for (const config of [legacy, dual]) {
   for (const manual of [false, true]) {
     test(`${config.mode} serves each ready slot during ${manual ? "manual" : "initial"} warmup`, { timeout: 10000 }, async () => {
       const originalFetch = global.fetch;
-      const gates = endpoints.map(() => ({ entered: deferred(), release: deferred() }));
-      const pool = new AgesConnectionPool("http://legacy", endpoints, config);
+      const groupedEndpoints = [...Array(5).fill("mini"), ...Array(5).fill("bigb")].map((kind) => ({ kind }));
+      const expectedOrder = Array.from({ length: 10 }, (_, i) => i % 2 === 0 ? "mini" : "bigb");
+      const gates = expectedOrder.map(() => ({ entered: deferred(), release: deferred() }));
+      const pool = new AgesConnectionPool("http://legacy", groupedEndpoints, config);
       let controlled = false;
       let index = 0;
       let completed = false;
       let warmup;
       const requests = [];
+      const warmupKinds = [];
       global.fetch = async (url, init) => {
         if (controlled && String(url).includes("dummy_val.ages")) {
+          warmupKinds.push(new URL(url).pathname.includes("~mini~") ? "mini" : "bigb");
           const gate = gates[index++];
           gate.entered.resolve();
           await gate.release.promise;
@@ -71,7 +75,8 @@ for (const config of [legacy, dual]) {
           await gates[i + 1].entered.promise;
           assert.equal(completed, false);
           assert.equal(pool.getSummary().ready, i + 1);
-          const result = await pool.proxyCall(endpoints[i].kind, "incremental");
+          assert.deepEqual(warmupKinds, expectedOrder.slice(0, i + 2));
+          const result = await pool.proxyCall(expectedOrder[i], "incremental");
           assert.equal(result.status, 200);
           const request = requests.at(-1);
           const host = new URL(request.url).hostname;
@@ -81,8 +86,11 @@ for (const config of [legacy, dual]) {
           await pool.runPingSweep();
           assert.equal(requests.length, callsBeforePing, "maintenance remains blocked during global warmup");
           assert.equal(index, i + 2, "maintenance must not reinitialize pending slots");
-          if (i < 2) await assert.rejects(pool.proxyCall("bigb", "blocked"), /still in warmup/);
+          if (i === 0) await assert.rejects(pool.proxyCall("bigb", "blocked"), /still in warmup/);
         }
+        gates.at(-1).release.resolve();
+        await warmup;
+        assert.equal(pool.getSummary().ready, 10);
       } finally {
         gates.forEach((gate) => gate.release.resolve());
         if (warmup) await warmup;
