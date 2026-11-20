@@ -197,7 +197,12 @@ El reciclado automático dual atiende los HTTP 503 de solicitudes y los HTTP 500
 persistentes de mantenimiento o warmup, con dos slots distintos del mismo backend.
 Si ambos backends cumplen ese umbral, el rescate de último recurso drena y recicla
 primero A, espera su warmup completo y recién entonces drena y recupera B.
-Si A falla o vence su drenaje, no toca B; nunca ejecuta un reinicio global de IIS.
+Si A falla o vence su drenaje, no toca B.
+Si todos los slots de A y B agotan la inicialización con HTTP 500 o 503 y ambas
+URL apuntan al destino SSH de IIS, se permite un `iisreset` global, sin
+operaciones ni mantenimiento activos. Este reinicio también consume el
+presupuesto de rescate, respeta el cooldown de IIS y vuelve a iniciar el warmup
+si tiene éxito. La opción manual de `iisreset` sigue deshabilitada en modo dual.
 
 El rescate permite como máximo dos ciclos automáticos por proceso, con cinco
 minutos de pausa desde la finalización de cada intento, incluso si falla. Una vez

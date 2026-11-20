@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const http = require('node:http');
+process.env.AGES_SSH_HOST = 'localhost';
 const { AgesConnectionPool } = require('../build/services/ages_pool');
 
 async function waitFor(check) {
@@ -29,11 +30,12 @@ async function fixture(t, options = {}) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const url = `http://127.0.0.1:${server.address().port}`;
+  const backendUrl = options.sharedHost ? url.replace('127.0.0.1', 'localhost') : url;
   const recycled = [];
   let pool;
   pool = new AgesConnectionPool(url,
     Array.from({ length: options.size || 4 }, (_, i) => ({ kind: options.mixed && i >= 4 ? 'bigb' : 'mini' })),
-    { mode: 'dual', backends: [{ id: 'A', baseUrl: `${url}/a` }, { id: 'B', baseUrl: `${url}/b` }] },
+    { mode: 'dual', backends: [{ id: 'A', baseUrl: `${backendUrl}/a` }, { id: 'B', baseUrl: `${backendUrl}/b` }] },
     { pollMs: 2, drainTimeoutMs: options.drainTimeoutMs || 500,
       recoveryNow: options.recoveryNow, recycleExecutor: async id => {
       assert.ok(pool.slots.filter(slot => slot.backendId === id)
@@ -268,4 +270,31 @@ test('confirma Mini y BigBoy de A antes de B sin solapar ejecutores', async t =>
   await waitFor(() => f.pool.getSummary().ready === 8 && !f.pool.lifecycle);
   assert.deepEqual(f.recycled, ['A', 'B']);
   assert.equal((await f.pool.proxyCall('bigb', 'check')).status, 201);
+});
+
+test('reinicia IIS una sola vez si fallan ambos AppPools del mismo host', async t => {
+  const { pool, statuses, recycled } = await fixture(t, { sharedHost: true });
+  statuses.A = 500;
+  statuses.B = 503;
+  const restarts = [];
+  pool.restartAgesHost = async reason => {
+    restarts.push(reason);
+    assert.ok(pool.slots.every(slot => !slot.inUse && slot.maintenanceInFlight === 0));
+    statuses.A = statuses.B = 201;
+    void pool.startWarmUp('reinicio IIS simulado');
+    return true;
+  };
+  assert.equal((await pool.warmUp()).error, 4);
+  await waitFor(() => pool.getSummary().ready === 4);
+  assert.deepEqual(restarts, ['dual_backends_unavailable']);
+  assert.deepEqual(recycled, []);
+  assert.equal((await pool.proxyCall('mini', 'check')).status, 201);
+});
+
+test('conserva el reciclado dirigido si el otro AppPool del mismo host está sano', async t => {
+  const { pool, statuses, recycled } = await fixture(t, { sharedHost: true });
+  statuses.A = 500;
+  assert.equal((await pool.warmUp()).error, 2);
+  await waitFor(() => pool.getSummary().ready === 4);
+  assert.deepEqual(recycled, ['A']);
 });

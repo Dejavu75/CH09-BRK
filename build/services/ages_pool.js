@@ -88,6 +88,8 @@ class AgesConnectionPool {
     }
     warmUp() {
         return __awaiter(this, arguments, void 0, function* (reason = "warmup requested") {
+            if (this.isDualHostRestartRunning())
+                throw new Error("IIS restart is running");
             if (this.legacyMaintenanceRecoveryRunning)
                 throw new Error("Cannot warm up during legacy maintenance recovery");
             return this.startWarmUp(reason);
@@ -282,6 +284,8 @@ class AgesConnectionPool {
         return __awaiter(this, void 0, void 0, function* () {
             if (this.backendConfiguration.mode !== "dual")
                 throw new Error("Directed recycle requires dual mode");
+            if (this.isDualHostRestartRunning())
+                throw new Error("IIS restart is running");
             const id = reference.trim().toUpperCase();
             const backend = this.backendStates.get(id);
             if (!backend || id === "legacy")
@@ -665,8 +669,25 @@ class AgesConnectionPool {
             (_b = this.failedSlotRecycles.get(slot.backendId)) === null || _b === void 0 ? void 0 : _b.delete(slot.id);
         }
     }
+    isDualHostUnavailable() {
+        const host = AGES_SSH_HOST.trim().toLowerCase();
+        const backends = this.backendConfiguration.backends;
+        return Boolean(host) && backends.length === 2 && backends.every(({ id, baseUrl }) => {
+            const slots = this.slots.filter((slot) => slot.backendId === id);
+            return getHostFromUrl(baseUrl).toLowerCase() === host && slots.length > 0 &&
+                slots.every((slot) => {
+                    var _a;
+                    return ((_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.has(slot.id)) &&
+                        slot.status === "error" && (slot.lastStatusCode === 500 || slot.lastStatusCode === 503);
+                });
+        });
+    }
+    isDualHostRestartRunning() {
+        return this.backendConfiguration.mode === "dual" && this.agesHostRestartRunning;
+    }
     scheduleBackendRecycleForFailedSlots(id, failedCount) {
-        if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle)
+        if ((failedCount < 2 && !this.isDualHostUnavailable()) ||
+            this.scheduledBackendRecycles.has(id) || this.lifecycle || this.isDualHostRestartRunning())
             return;
         this.scheduledBackendRecycles.add(id);
         // Esperar al warmup y liberar mantenimiento antes de iniciar el drenaje dirigido.
@@ -675,7 +696,7 @@ class AgesConnectionPool {
                 var _a, _b;
                 if (this.warmupPromise)
                     yield this.warmupPromise;
-                if (((_b = (_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) < 2 || this.lifecycle)
+                if (((_b = (_a = this.failedSlotRecycles.get(id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) < 2 && !this.isDualHostUnavailable())
                     return;
                 yield this.recoverBackendAutomatically(id);
             }))().catch((error) => {
@@ -696,20 +717,34 @@ class AgesConnectionPool {
     }
     recoverBackendAutomatically(id) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (this.warmupPromise || this.lifecycle)
+            if (this.warmupPromise || this.lifecycle || this.isDualHostRestartRunning())
                 return this.getSummary();
+            const globalFailure = this.isDualHostUnavailable();
             const backends = this.backendConfiguration.backends;
             const dualFailure = this.backendConfiguration.mode === "dual" && backends.every((backend) => {
                 var _a, _b;
                 return ((_b = (_a = this.failedSlotRecycles.get(backend.id)) === null || _a === void 0 ? void 0 : _a.size) !== null && _b !== void 0 ? _b : 0) >= 2 &&
                     this.slots.some((slot) => slot.backendId === backend.id && slot.status === "error");
             });
-            if (!dualFailure && this.dualRecoveryAttempts === 0)
+            if (!globalFailure && !dualFailure && this.dualRecoveryAttempts === 0)
                 return this.drainAndRecycleBackend(id);
             // Tras un rescate, también los reintentos parciales comparten el mismo presupuesto.
             if (this.dualRecoveryAttempts >= DUAL_RECOVERY_MAX_ATTEMPTS ||
                 this.recoveryNow() < this.dualRecoveryCooldownUntil) {
                 (0, logger_1.warn)(`dual recovery skip | attempts=${this.dualRecoveryAttempts} | cooldownUntil=${this.dualRecoveryCooldownUntil}`);
+                return this.getSummary();
+            }
+            if (globalFailure) {
+                if (this.slots.some((slot) => slot.inUse || slot.maintenanceInFlight > 0))
+                    return this.getSummary();
+                // Reserve the shared recovery budget before invoking the host-wide operation.
+                this.dualRecoveryAttempts++;
+                try {
+                    yield this.restartAgesHost("dual_backends_unavailable");
+                }
+                finally {
+                    this.dualRecoveryCooldownUntil = this.recoveryNow() + DUAL_RECOVERY_COOLDOWN_MS;
+                }
                 return this.getSummary();
             }
             const targets = dualFailure ? ["A", "B"] : [id];
@@ -983,6 +1018,8 @@ class AgesConnectionPool {
     }
     runGrowPool(kind) {
         return __awaiter(this, void 0, void 0, function* () {
+            if (this.isDualHostRestartRunning())
+                return undefined;
             const maxSlots = this.getMaxSlots(kind);
             const kindSlots = this.slots.filter((slot) => slot.kind === kind);
             if (kindSlots.length >= maxSlots) {
@@ -1236,7 +1273,7 @@ class AgesConnectionPool {
     }
     isBackendActive(slot) {
         var _a;
-        return ((_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state) === "active";
+        return !this.isDualHostRestartRunning() && ((_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state) === "active";
     }
     isBackendRoutable(slot) {
         var _a;
@@ -1248,7 +1285,7 @@ class AgesConnectionPool {
     isBackendAvailableForMaintenance(slot) {
         var _a;
         const state = (_a = this.backendStates.get(slot.backendId)) === null || _a === void 0 ? void 0 : _a.state;
-        return state === "active" || state === "degraded";
+        return !this.isDualHostRestartRunning() && (state === "active" || state === "degraded");
     }
     restoreBackendHealthIfRecovered(id) {
         const backend = this.backendStates.get(id);
@@ -1437,7 +1474,7 @@ class AgesConnectionPool {
                     "StrictHostKeyChecking=accept-new",
                     `${AGES_SSH_USER}@${AGES_SSH_HOST}`,
                     AGES_SSH_RESTART_COMMAND
-                ]);
+                ], this.isDualHostRestartRunning() ? { timeout: AGES_SSH_COMMAND_TIMEOUT_MS } : {});
                 (0, logger_1.log)(`ages restart ok | host=${AGES_SSH_HOST} | reason=${reason}`);
                 this.pushTimingEvent(`IIS restart ok: ${reason}`);
                 void this.startWarmUp(`host restart ${reason}`);

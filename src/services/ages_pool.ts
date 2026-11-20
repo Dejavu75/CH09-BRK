@@ -228,6 +228,7 @@ export class AgesConnectionPool {
   }
 
   async warmUp(reason = "warmup requested"): Promise<AgesPoolSummary> {
+    if (this.isDualHostRestartRunning()) throw new Error("IIS restart is running");
     if (this.legacyMaintenanceRecoveryRunning) throw new Error("Cannot warm up during legacy maintenance recovery");
     return this.startWarmUp(reason);
   }
@@ -439,6 +440,7 @@ export class AgesConnectionPool {
 
   async drainAndRecycleBackend(reference: string): Promise<AgesPoolSummary> {
     if (this.backendConfiguration.mode !== "dual") throw new Error("Directed recycle requires dual mode");
+    if (this.isDualHostRestartRunning()) throw new Error("IIS restart is running");
     const id = reference.trim().toUpperCase() as AgesBackendId;
     const backend = this.backendStates.get(id);
     if (!backend || id === "legacy") throw new Error(`Unknown AGES backend ${reference}`);
@@ -857,14 +859,30 @@ export class AgesConnectionPool {
     }
   }
 
+  private isDualHostUnavailable(): boolean {
+    const host = AGES_SSH_HOST.trim().toLowerCase();
+    const backends = this.backendConfiguration.backends;
+    return Boolean(host) && backends.length === 2 && backends.every(({ id, baseUrl }) => {
+      const slots = this.slots.filter((slot) => slot.backendId === id);
+      return getHostFromUrl(baseUrl).toLowerCase() === host && slots.length > 0 &&
+        slots.every((slot) => this.failedSlotRecycles.get(id)?.has(slot.id) &&
+          slot.status === "error" && (slot.lastStatusCode === 500 || slot.lastStatusCode === 503));
+    });
+  }
+
+  private isDualHostRestartRunning(): boolean {
+    return this.backendConfiguration.mode === "dual" && this.agesHostRestartRunning;
+  }
+
   private scheduleBackendRecycleForFailedSlots(id: AgesBackendId, failedCount: number): void {
-    if (failedCount < 2 || this.scheduledBackendRecycles.has(id) || this.lifecycle) return;
+    if ((failedCount < 2 && !this.isDualHostUnavailable()) ||
+        this.scheduledBackendRecycles.has(id) || this.lifecycle || this.isDualHostRestartRunning()) return;
     this.scheduledBackendRecycles.add(id);
     // Esperar al warmup y liberar mantenimiento antes de iniciar el drenaje dirigido.
     setImmediate(() => {
       void (async () => {
         if (this.warmupPromise) await this.warmupPromise;
-        if ((this.failedSlotRecycles.get(id)?.size ?? 0) < 2 || this.lifecycle) return;
+        if ((this.failedSlotRecycles.get(id)?.size ?? 0) < 2 && !this.isDualHostUnavailable()) return;
         await this.recoverBackendAutomatically(id);
       })().catch((error) => {
         warn(`automatic backend recycle fail | backend=${id} | err=${safeErrorName(error)}`);
@@ -884,18 +902,30 @@ export class AgesConnectionPool {
   }
 
   private async recoverBackendAutomatically(id: AgesBackendId): Promise<AgesPoolSummary> {
-    if (this.warmupPromise || this.lifecycle) return this.getSummary();
+    if (this.warmupPromise || this.lifecycle || this.isDualHostRestartRunning()) return this.getSummary();
+    const globalFailure = this.isDualHostUnavailable();
     const backends = this.backendConfiguration.backends;
     const dualFailure = this.backendConfiguration.mode === "dual" && backends.every((backend) =>
       (this.failedSlotRecycles.get(backend.id)?.size ?? 0) >= 2 &&
       this.slots.some((slot) => slot.backendId === backend.id && slot.status === "error")
     );
-    if (!dualFailure && this.dualRecoveryAttempts === 0) return this.drainAndRecycleBackend(id);
+    if (!globalFailure && !dualFailure && this.dualRecoveryAttempts === 0) return this.drainAndRecycleBackend(id);
 
     // Tras un rescate, también los reintentos parciales comparten el mismo presupuesto.
     if (this.dualRecoveryAttempts >= DUAL_RECOVERY_MAX_ATTEMPTS ||
         this.recoveryNow() < this.dualRecoveryCooldownUntil) {
       warn(`dual recovery skip | attempts=${this.dualRecoveryAttempts} | cooldownUntil=${this.dualRecoveryCooldownUntil}`);
+      return this.getSummary();
+    }
+    if (globalFailure) {
+      if (this.slots.some((slot) => slot.inUse || slot.maintenanceInFlight > 0)) return this.getSummary();
+      // Reserve the shared recovery budget before invoking the host-wide operation.
+      this.dualRecoveryAttempts++;
+      try {
+        await this.restartAgesHost("dual_backends_unavailable");
+      } finally {
+        this.dualRecoveryCooldownUntil = this.recoveryNow() + DUAL_RECOVERY_COOLDOWN_MS;
+      }
       return this.getSummary();
     }
     const targets = dualFailure ? ["A", "B"] as AgesBackendId[] : [id];
@@ -1253,6 +1283,7 @@ export class AgesConnectionPool {
   }
 
   private async runGrowPool(kind: AgesPoolSlotKind): Promise<AgesPoolSlot | undefined> {
+    if (this.isDualHostRestartRunning()) return undefined;
     const maxSlots = this.getMaxSlots(kind);
     const kindSlots = this.slots.filter((slot) => slot.kind === kind);
 
@@ -1564,7 +1595,7 @@ export class AgesConnectionPool {
   }
 
   private isBackendActive(slot: AgesPoolSlot): boolean {
-    return this.backendStates.get(slot.backendId)?.state === "active";
+    return !this.isDualHostRestartRunning() && this.backendStates.get(slot.backendId)?.state === "active";
   }
 
   private isBackendRoutable(slot: AgesPoolSlot): boolean {
@@ -1576,7 +1607,7 @@ export class AgesConnectionPool {
 
   private isBackendAvailableForMaintenance(slot: AgesPoolSlot): boolean {
     const state = this.backendStates.get(slot.backendId)?.state;
-    return state === "active" || state === "degraded";
+    return !this.isDualHostRestartRunning() && (state === "active" || state === "degraded");
   }
 
   private restoreBackendHealthIfRecovered(id: AgesBackendId): void {
@@ -1783,7 +1814,7 @@ export class AgesConnectionPool {
         "StrictHostKeyChecking=accept-new",
         `${AGES_SSH_USER}@${AGES_SSH_HOST}`,
         AGES_SSH_RESTART_COMMAND
-      ]);
+      ], this.isDualHostRestartRunning() ? { timeout: AGES_SSH_COMMAND_TIMEOUT_MS } : {});
       log(`ages restart ok | host=${AGES_SSH_HOST} | reason=${reason}`);
       this.pushTimingEvent(`IIS restart ok: ${reason}`);
       void this.startWarmUp(`host restart ${reason}`);
