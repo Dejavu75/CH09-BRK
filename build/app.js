@@ -51,6 +51,7 @@ const trusted_proxy_1 = require("./auth/trusted_proxy");
 const rou_broker_1 = require("./routes/rou_broker");
 const ages_pool_1 = require("./services/ages_pool");
 const heartbeat_metadata_1 = require("./services/heartbeat_metadata");
+const ms07_relay_1 = require("./services/ms07_relay");
 const tls_reloader_1 = require("./services/tls_reloader");
 const logger_1 = require("./utils/logger");
 (0, heartbeat_metadata_1.configureHeartbeatExtraData)();
@@ -99,7 +100,19 @@ const config = (0, se_configbase_1.getServingConfig)();
 const httpServer = http_1.default.createServer(app);
 httpServer.listen(config.port, () => {
     (0, logger_1.log)(`CH09-BRK HTTP Server running on port ${config.port}`);
-    void (0, se_configbase_1.registerService)();
+    if (process.env.BROKER_MS07_RELAY_ENABLED === "true") {
+        try {
+            const relay = (0, ms07_relay_1.readMs07RelayConfig)(process.env);
+            const origins = (0, ages_pool_1.resolveBackendConfiguration)(process.env).backends.map(backend => backend.baseUrl);
+            httpServer.once("close", (0, ms07_relay_1.startMs07Relay)(relay, origins, process.env.AGES_API_KEY, logger_1.warn));
+        }
+        catch (_a) {
+            (0, logger_1.warn)("Invalid MS07 heartbeat relay configuration; no registration or relay will be sent");
+        }
+    }
+    else {
+        void (0, se_configbase_1.registerService)();
+    }
     void ages_pool_1.agesConnectionPool.warmUp().then((summary) => {
         (0, logger_1.log)(`AGES pool warmup finished: ${summary.ready}/${summary.size} ready`);
         ages_pool_1.agesConnectionPool.startPingMonitor();

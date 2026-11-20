@@ -8,6 +8,24 @@ El límite máximo del cuerpo HTTP se configura con `REQUEST_BODY_LIMIT`. Si no
 se define, el Broker acepta hasta `100mb` tanto para el proxy AGES como para
 las solicitudes JSON.
 
+## Latidos salientes a MS07 (opcional)
+
+Por defecto se conserva el registro y monitoreo anterior. Para un broker sin
+entrada pública, configura en MS07 el par de servicios y después activa
+`BROKER_MS07_RELAY_ENABLED=true`. Define `BROKER_MS07_RELAY_URL` con la URL
+HTTPS completa de `/healthmonitor/heartbeat/broker-relay` y
+`BROKER_MS07_RELAY_KEY` con la clave exclusiva del par. `MSCODE` y
+`MSINSTANCE` deben coincidir con el registro del broker; `MSMONINTERVAL`
+define la cadencia en segundos. Inyecta la clave como secreto, no en Git.
+
+El broker ejecuta un GET privado a `~mini~/beat.ages` en `HAAGES` o en
+`HAAGES_A` y `HAAGES_B` (en modo dual basta un backend válido). Usa
+`AGES_API_KEY` si está configurada. No usa slots ni dispara reinicios. Envía
+su estado y el de AGES por separado, con las versiones reconocidas, sin
+reenviar el cuerpo crudo. `BROKER_MS07_RELAY_TIMEOUT_MS` vale 5000 por defecto;
+cada intervalo debe ser mayor que dos veces el límite. En este modo ya no
+se llama a `MSHEARTBEATMONITOR` para el registro de arranque.
+
 ## Camino rápido
 
 ```bash

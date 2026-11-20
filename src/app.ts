@@ -11,8 +11,9 @@ import { createAuthHttp } from "./auth/http";
 import { loadServiceKey } from "./auth/service_key";
 import { trustedProxyAddresses } from "./auth/trusted_proxy";
 import { BrokerRouter } from "./routes/rou_broker";
-import { agesConnectionPool } from "./services/ages_pool";
+import { agesConnectionPool, resolveBackendConfiguration } from "./services/ages_pool";
 import { configureHeartbeatExtraData } from "./services/heartbeat_metadata";
+import { readMs07RelayConfig, startMs07Relay } from "./services/ms07_relay";
 import { startTlsCertificateReload } from "./services/tls_reloader";
 import { error, isConfigEnabled, log, warn } from "./utils/logger";
 
@@ -74,7 +75,17 @@ const httpServer = http.createServer(app);
 
 httpServer.listen(config.port, () => {
   log(`CH09-BRK HTTP Server running on port ${config.port}`);
-  void registerService();
+  if (process.env.BROKER_MS07_RELAY_ENABLED === "true") {
+    try {
+      const relay = readMs07RelayConfig(process.env)!;
+      const origins = resolveBackendConfiguration(process.env).backends.map(backend => backend.baseUrl);
+      httpServer.once("close", startMs07Relay(relay, origins, process.env.AGES_API_KEY, warn));
+    } catch {
+      warn("Invalid MS07 heartbeat relay configuration; no registration or relay will be sent");
+    }
+  } else {
+    void registerService();
+  }
   void agesConnectionPool.warmUp().then((summary) => {
     log(`AGES pool warmup finished: ${summary.ready}/${summary.size} ready`);
     agesConnectionPool.startPingMonitor();

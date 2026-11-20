@@ -67,6 +67,7 @@ function createProxy(upstreamUrl, options = {}) {
     "./routes/rou_broker": router,
     "./services/ages_pool": { agesConnectionPool: pool },
     "./services/heartbeat_metadata": dependencies["../services/heartbeat_metadata"],
+    "./services/ms07_relay": require("../build/services/ms07_relay"),
     "./services/tls_reloader": { startTlsCertificateReload() { return () => {}; } },
     "./auth/auth_service": { BrokerAuthService: class { constructor() { authInitialized = true; } } },
     "./auth/central_beat": { verifyMs07BeatCentrally() {} },
